@@ -1,0 +1,11 @@
+# Exported art. Every file under here is a pure function of (generator, seed),
+# so `lua5.4 art/tools/export.lua` reproduces it byte for byte -- and the PNG
+# writer emits uncompressed deflate, which makes the review sheets large.
+art/generated/
+
+# Packaged Aseprite extension, built from art/tools/ on demand
+*.aseprite-extension
+
+# Editor and OS noise
+*.swp
+.DS_Store
