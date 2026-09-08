@@ -808,6 +808,43 @@ function P.interior_ratio(surface)
   return interior / opaque
 end
 
+--- Remove outline pixels that no longer have a body pixel beside them.
+--
+-- ART_STYLE.md 9 draws the outline BEFORE wear, deliberately, so corrosion can
+-- eat into the silhouette without eating the outline. The consequence is that
+-- a wear channel which REMOVES body -- `missing`, punching a hole clean
+-- through -- can strand the outline pixels that used to sit against it, and
+-- what is left is an ink fragment floating clear of the shape. That is exactly
+-- what the `outline_thickness` validator condemns, and it found it on the
+-- pallet, whose missing-slat channel is the whole point of the asset.
+--
+-- So orphaned outline is swept up in cleanup, where the rest of the
+-- after-effects of wear are handled.
+-- @return number of pixels erased
+function P.strip_orphan_outline(surface, opts)
+  opts = opts or {}
+  local outline = palette.resolve(opts.color or style.outline_color)
+  local erased = 0
+  -- Snapshot first: an outline pixel's neighbours may themselves be outline
+  -- pixels about to be removed, and deciding against a surface that is being
+  -- mutated makes the result depend on scan order.
+  local snapshot = surface:clone()
+  for x, y, c in snapshot:pixels() do
+    if c == outline then
+      local touches = false
+      for _, d in ipairs { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } } do
+        local n = snapshot:get(x + d[1], y + d[2])
+        if n ~= palette.TRANSPARENT and n ~= outline then touches = true break end
+      end
+      if not touches then
+        surface:set(x, y, palette.TRANSPARENT)
+        erased = erased + 1
+      end
+    end
+  end
+  return erased
+end
+
 --- Fill enclosed one-pixel transparent holes with the colour around them.
 --
 -- A pinhole is always a bug: it is what is left when strokes radiating from a

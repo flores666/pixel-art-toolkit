@@ -74,10 +74,24 @@ end
 --   ramp   the palette ramp the body is made of; overlays are masked to it so
 --          wear never lands on the outline, a hole or a weed
 --   area   restrict everything to a sub-rectangle
+-- @param spec.constrain optional predicate every channel must respect, on top
+--   of its own ramp mask. object.finish passes the JOIN BORDER mask here, and
+--   that is not cosmetic: a modular piece's connecting edge has to present the
+--   canonical profile, and a channel that paints onto transparency -- the
+--   vegetation channel does, since a weed grows out of nothing -- can drop a
+--   tuft on a border pixel where the neighbouring piece has empty sky. The
+--   socket validator catches it, and this is the fix.
 function wear.apply(surface, rng_stream, spec)
   spec = spec or {}
   local h = surface.height
   local ramp_mask = spec.ramp and P.ramp_mask(spec.ramp) or nil
+  if spec.constrain then
+    local ramp_only = ramp_mask
+    ramp_mask = function(x, y, c)
+      if not spec.constrain(x, y, c) then return false end
+      return not ramp_only or ramp_only(x, y, c)
+    end
+  end
   local area = spec.area
 
   -- structure first ---------------------------------------------------------
@@ -162,7 +176,7 @@ function wear.apply(surface, rng_stream, spec)
   local fell = strength(spec.rubble, rng_stream:branch("wear_rubble"))
   if fell and fell > 0 then
     materials.debris.fill(surface, rng_stream:branch("rubble"), {
-      coverage = fell, kinds = spec.rubble_kinds,
+      coverage = fell, kinds = spec.rubble_kinds, mask = spec.constrain,
       area = spec.rubble_area or { x = 0, y = h - 3, w = surface.width, h = 3 },
     })
   end
@@ -174,6 +188,10 @@ function wear.apply(surface, rng_stream, spec)
     materials.grass.tufts(surface, 1, r, {
       at = { r:range(a.x, a.x + a.w - 1), r:range(a.y, a.y + a.h - 1) },
       color = r:chance(0.5) and "grass_2" or "straw_1",
+      -- vegetation paints onto TRANSPARENCY (that is what growing is), so
+      -- unlike the other channels it is not naturally confined by the ramp
+      -- mask and needs the constraint applied directly
+      mask = spec.constrain,
     })
   end
 end

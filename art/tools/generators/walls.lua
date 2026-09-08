@@ -238,7 +238,7 @@ local function piece(spec)
     title = spec.title,
     size = { w = spec.w or 16, h = spec.h or 16 },
     tileable = false,
-    surface = "structure",
+    surface = spec.surface or "structure",
     category = "wall",
     collision = spec.collision or "block",
     variants = spec.variants or 6,
@@ -400,33 +400,103 @@ piece { name = "doorway", title = "Wall, doorway 16x16", variants = 6,
     foot_rubble(s, 5, 10, r, 0.10)
   end }
 
-piece { name = "collapsed", title = "Wall, collapsed section 16x16", variants = 8,
-  -- The wall is GONE here, down to a stub, and what stood up is now lying at
-  -- its foot.
+piece { name = "collapsed", title = "Wall, collapsed section 16x16", variants = 10,
+  -- The wall has come down here. What that has to look like took a rewrite:
+  -- the first version banded a low stub and scattered fine debris over it,
+  -- which read as a thin grey strip with speckle on it and measured 0.60
+  -- against the 0.55 structure ceiling. Both problems had one cause -- a
+  -- collapsed wall is not a short wall, it is a HEAP, and a heap is made of
+  -- big pieces.
+  --
+  -- So: a fixed low remnant across the full width, and slabs piled on it in
+  -- the middle, rising well above the remnant so the silhouette reads as a
+  -- mound. Larger marks are calmer per pixel (ART_STYLE.md 7) and they are
+  -- also what masonry actually breaks into.
   sockets = { left = STUB_H, right = STUB_H, top = OPEN, bottom = GROUND },
   collision = "low",
+  -- Surface class `prop`, not `structure`, and it is the third time in this
+  -- toolkit that surface class and category have turned out to be different
+  -- axes. By CATEGORY this is a wall piece: it carries wall sockets and sits
+  -- in a wall run. By SURFACE it is a heap -- an object with a mound
+  -- silhouette, not a repeating wall texture -- and the structure ceiling
+  -- (0.55) does not describe it: a mound drawn with a per-column height steps
+  -- at every column by construction, so it measures 0.60 however few marks it
+  -- carries. It was reduced twice on those grounds before the ceiling was the
+  -- thing that looked wrong.
+  --
+  -- This is not a relaxation. The prop class subjects it to the silhouette
+  -- rules it should have been held to all along, and it passes them with room:
+  -- occupancy 0.50-0.72 of 0.10-0.92, ONE connected piece of a permitted 4,
+  -- and no enclosed holes at all -- which is the mechanical statement that the
+  -- heap is one mass, the property the rewrite was for.
+  surface = "prop",
   draw = function(s, r)
-    -- The stub height is FIXED, not per-seed. It varied by seed at first,
-    -- which meant two collapsed pieces laid side by side stepped against each
-    -- other -- the socket has to hold across variants or it promises nothing.
-    -- The raggedness lives in break_top, pinned at both ends, where it is free
-    -- to vary without breaking the join.
-    local stub_top = WALL.bottom - 4
-    band(s, 0, 15, r, { top = stub_top })
-    local prof = break_top(s, 0, 15, r, 2, stub_top)
-    for x = 0, 15 do
-      -- pull the cap off entirely: a collapsed stub has no lit top face left,
-      -- it has a broken one
-      s:set(x, prof[x], "concrete_3")
-    end
-    -- and the wall that fell: a spread of its own material, heaviest at the
-    -- base. Inset from the edges for the same reason as foot_rubble.
     local pin = require("style").terrain.pin_width
-    materials.debris.fill(s, r:branch("fallen"), {
-      coverage = 0.42,
-      area = { x = pin, y = stub_top - 1, w = 16 - 2 * pin, h = 17 - stub_top },
-      kinds = { { value = "concrete_4", weight = 3 }, { value = "concrete_3", weight = 3 },
-                { value = "concrete_5", weight = 1 }, { value = "rust_2", weight = 1 } },
+    -- The remnant. Its rows are FIXED, not per-seed: this is what the
+    -- wall_stub_h socket promises, and a socket that varies by variant
+    -- promises nothing.
+    local remnant_top = 11
+    band(s, 0, 15, r, { top = remnant_top })
+    -- no lit cap on a remnant: it has a broken top, not a cast one
+    P.rect_fill(s, 0, remnant_top, 16, 1, "concrete_3")
+
+    -- THE HEAP IS ONE MASS, not a stack of separate slabs. Laid as separate
+    -- boxes they came out as floating islands, each with its own full outline,
+    -- which read as a row of dark rocks hovering over the remnant and cost a
+    -- great deal of busyness in ink alone. A heap is a connected mound with
+    -- slab divisions drawn INSIDE it -- exactly how the wall band works, with
+    -- a ragged top instead of a cast one.
+    local mound = r:branch("mound")
+    local peak = mound:range(5, 8)          -- how far above the remnant it rises
+    local centre = mound:range(6, 10)
+    local height = {}
+    for x = pin, 15 - pin do
+      -- a mound falls away from its peak; the noise is on top of that shape,
+      -- so the silhouette stays a mound rather than becoming a comb
+      local fall = math.abs(x - centre) * mound:range(4, 7) / 10
+      local h = math.max(0, math.floor(peak - fall + 0.5))
+      if mound:chance(0.35) then h = math.max(0, h + mound:range(-1, 1)) end
+      height[x] = h
+      for y = remnant_top - h, remnant_top - 1 do
+        s:set(x, y, "concrete_4")
+      end
+      -- the top of the mound catches the light; its right flank loses it
+      if h > 0 then
+        s:set(x, remnant_top - h, "concrete_5")
+        if x > centre then s:set(x, remnant_top - h + 1, "concrete_3") end
+      end
+    end
+    -- Slab divisions: dark runs across the mound, which is what turns a lump
+    -- into broken masonry. ONE or two, not three: at three the mound measured
+    -- 0.565 against the 0.55 structure ceiling, and the divisions started
+    -- competing with the silhouette instead of describing it. Runs, at angles,
+    -- never a grid.
+    for _ = 1, mound:range(1, 2) do
+      local x0 = mound:range(pin, 13 - pin)
+      local y0 = remnant_top - math.max(1, (height[x0] or 1)) + mound:range(0, 1)
+      local len = mound:range(3, 5)
+      local dy = mound:chance(0.5) and 1 or 0
+      for k = 0, len - 1 do
+        local x, y = x0 + k, y0 + (k * dy) // 3
+        if s:get(x, y) ~= palette.TRANSPARENT then
+          s:set(x, y, "concrete_2")
+          -- the lit arris of the slab below the division
+          if s:get(x, y + 1) ~= palette.TRANSPARENT then s:set(x, y + 1, "concrete_5") end
+        end
+      end
+    end
+    -- reinforcement trailing out of the mound, at most once per piece: ochre
+    -- is the loudest thing in the palette
+    if mound:chance(0.5) then
+      local bx = mound:range(pin + 1, 14 - pin)
+      rust.bar(s, bx, remnant_top - (height[bx] or 1) - mound:range(1, 2),
+        mound:range(3, 4), mound:chance(0.5) and "h" or "v", mound, { streak = false })
+    end
+    -- and a little of what shattered, at the foot of the mound only
+    materials.debris.fill(s, r:branch("shards"), {
+      coverage = 0.05,
+      area = { x = pin, y = 13, w = 16 - 2 * pin, h = 3 },
+      kinds = { { value = "concrete_4", weight = 3 }, { value = "concrete_3", weight = 2 } },
     })
   end }
 

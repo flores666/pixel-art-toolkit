@@ -57,13 +57,24 @@ function object.finish(surface, rng_stream, opts)
     P.outline(surface, opts.outline_color, { mask = border_mask })
   end
   if opts.wear then
-    require("wear").apply(surface, rng_stream:branch("wear"), opts.wear)
+    -- The join border mask goes to the wear system too: a channel that paints
+    -- onto transparency can otherwise drop a weed or a chunk on a connecting
+    -- edge, where the neighbouring piece has nothing, and the run steps.
+    local spec = opts.wear
+    if border_mask then
+      spec = setmetatable({ constrain = border_mask }, { __index = opts.wear })
+    end
+    require("wear").apply(surface, rng_stream:branch("wear"), spec)
   end
   -- Cleanup. On an object the vote is right (there is a body to vote with),
   -- but a true floater left over from a wear overlay has nothing to vote from,
   -- so both passes run: absorb what can be absorbed, erase what cannot.
   P.despeckle(surface, { keep = opts.keep })
   P.strip_strays(surface, { keep = opts.keep })
+  -- Wear that REMOVES body (the `missing` channel) strands the outline pixels
+  -- that used to sit against it. The outline is drawn before wear on purpose,
+  -- so sweeping up after it belongs here.
+  if opts.outline ~= false then P.strip_orphan_outline(surface) end
 
   -- No contact shadow on an edge the run continues through: the object does
   -- not touch the ground there, it carries on into the next cell.

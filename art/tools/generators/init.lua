@@ -73,9 +73,9 @@ generators.modules = {
   "concrete_ruin_wall",
   "rusted_fence",
   "walls",               -- set: the modular ruined-wall kit               -- set: the modular ruined-wall kit
-  -- TODO "fences",              -- set: the modular fence/barrier kit
+  "fences",              -- set: the modular fence/barrier kit              -- set: the modular fence/barrier kit
   -- infrastructure
-  -- TODO "road_kit",            -- set: barriers, signs, poles, lamps, cabinets, pipes
+  "road_kit",            -- set: barriers, signs, poles, lamps, cabinets, pipes            -- set: barriers, signs, poles, lamps, cabinets, pipes
   -- TODO "rubble",              -- set: debris and destruction
   -- props
   "supply_crate",

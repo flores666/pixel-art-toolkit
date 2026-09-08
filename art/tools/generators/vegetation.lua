@@ -328,7 +328,8 @@ veg { name = "tree_stump", title = "Tree stump 16x16", variants = 10,
     end
   end,
   wear = { ramp = "wood", dirt = { { value = 0, weight = 1 }, { value = 0.12, weight = 2 } },
-    vegetation = { { value = 0, weight = 2 }, { value = 1, weight = 1 } } } }
+    vegetation = { { value = 0, weight = 2 }, { value = 1, weight = 1 } },
+    vegetation_area = { x = 2, y = 11, w = 12, h = 3 } } }
 
 veg { name = "broken_trunk", title = "Broken trunk 16x32", w = 16, h = 32, variants = 8,
   collision = "hull",
@@ -428,14 +429,22 @@ veg { name = "fallen_log", title = "Fallen log 32x16", w = 32, h = 16, variants 
       P.broken_run(s, "h", y0 + bark:range(1, h - 2), x0 + 2, x1, bark,
         { delta = -1, run = { 3, 7 }, gap = { 3, 6 } })
     end
-    -- a stub where a limb came off
+    -- A stub where a limb came off. It must TOUCH the log: drawn one column
+    -- clear of it the stub is a separate floating island, which is both a
+    -- silhouette defect (the validator counted five pieces) and wrong -- a
+    -- branch stub is part of the trunk it broke off.
     if r:chance(0.6) then
       local sx = r:range(x0 + 5, x1 - 5)
       for k = 1, r:range(2, 3) do P.pixel(s, sx, y0 - k, "wood_3") end
-      P.pixel(s, sx - 1, y0 - 1, "wood_4")
+      P.pixel(s, sx, y0 - 1, "wood_4")
     end
   end,
+  -- The vegetation channel is confined to the log's own footprint. Left
+  -- unbounded it dropped a tuft anywhere in the 32x16 cell, which is a
+  -- separate floating island rather than growth against the log -- the
+  -- silhouette rule counted five pieces and was right to.
   wear = { ramp = "wood", dirt = { { value = 0, weight = 1 }, { value = 0.10, weight = 2 } },
-    vegetation = { { value = 0, weight = 2 }, { value = 1, weight = 1 } } } }
+    vegetation = { { value = 0, weight = 2 }, { value = 1, weight = 1 } },
+    vegetation_area = { x = 3, y = 10, w = 26, h = 3 } } }
 
 return set
