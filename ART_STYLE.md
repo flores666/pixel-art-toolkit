@@ -57,7 +57,7 @@ the only one with its own measurement, `previews.grid_report`:
 Calibrated, not invented: the game's **own** metro floor variants laid in a
 field score `seam_bias` **4.2 / 10.3** — every tile has a baked-in dark edge, and
 that grid is plain to see. Continuous, never-tiled reference art scores **0.01**.
-The above-ground ground tiles score 0.02–0.25.
+The above-ground ground tiles score 0.02–0.32.
 
 ### How a ground tile is allowed to vary
 
@@ -88,6 +88,36 @@ has to look like, and it rules out the obvious approach:
   impossible by construction: the only things that survive repetition are
   texture too quiet to count and marks that read as objects.
 
+### Detail lives in decals, not in ground tiles
+
+This is the rule the whole library is built around, and it is the one that
+finally made the fields work.
+
+A stone drawn into a 16×16 field tile is not a stone: it is a stone **printed
+once per cell**, a hundred times a screen, on a 16 px pitch. Every tile passes
+every rule and the field reads as static — and no measurement here can see it,
+because `edge_density` counts pixel pairs that differ and cannot tell one
+deliberate mark from a hundred copies of it.
+
+So:
+
+- a **field tile** is the terrain fill plus, on a minority of variants, one
+  *hairline* mark from a shared vocabulary (`terrain.marks`: a soil crust, a
+  bleached stem, a hairline fracture, a vehicle rut). That is exactly how the
+  game's own authored floor tiles are built;
+- everything larger — stones, tufts, cracks, potholes, stains, litter, rubble
+  — is a **decal**: a transparent 16×16 overlay, placed where the level wants
+  one. `generators/decals.lua`, 16 families.
+
+The density of detail in a location is then a level-design decision instead of
+a constant baked into the tileset.
+
+A decal is held to `style.decal`: mostly transparent (≤ 40 % coverage, ≥ 1.8 %),
+**one mark in one place** (≤ 4 groups by `pixel_utils.mark_groups`), and
+**self-lit** — there is no body under a decal to infer light from, so every
+mark carries its own lit cap and its own cast shadow or it reads as a hole in
+the ground.
+
 What that means when you write a ground generator:
 
 - **Nothing keys to an edge or a corner.** No joint, no border, no vignette, no
@@ -101,6 +131,75 @@ What that means when you write a ground generator:
   together read as static.
 - Vertical asymmetry of about 0.1 in `seam_bias` is expected and is not a bug:
   the fixed key light puts shadows on the lower side of every mark.
+
+### Terrains must be told apart from each other, not only judged alone
+
+A tile can satisfy every rule above and still be useless, because the check
+that matters for a *terrain* is comparative. Five of the nine terrains once sat
+within **five luminance** of each other at a similar hue — each one calm,
+correct and calibrated — and a composed map read as one undifferentiated brown
+mass. The palette's warm mid-tones are crowded (`earth_3` 71, `grass_3` 74,
+`straw_2` 76), so this is easy to walk into.
+
+The ladder the terrains hold now, as mean tile luminance:
+
+| terrain | base | mean |
+| --- | --- | --- |
+| mud | `earth_2` | 56 |
+| asphalt / broken asphalt | `asphalt_3` | 59–61 |
+| dirt, gravel | `earth_3` | 72 |
+| sparse grass | `straw_2` | 74 |
+| concrete | `concrete_4` | 86 |
+| dirt + grass | `earth_4` | 95 |
+| dry grass | `straw_3` | 103 |
+
+Two rules fall out of it:
+
+- **Separation comes from the base, never from the patch.** Lifting a
+  terrain's *patch* to a distant value to raise its average puts a value event
+  in every tile, and a field of those is leopard spots on a 16 px pitch — the
+  §2 failure by another route. Move the base and keep the patch near it.
+- **Grass is separated from soil by direction, not only by value.** A grass
+  field carries fine directional texture: short broken runs, one pixel wide,
+  *all leaning the same way*, drawn in the near-value neighbour. Soil has no
+  direction, and that is the difference. (This is what was lost when tufts
+  became decals, and it had to be put back.)
+
+### Boundaries: the autotile system
+
+Two terrains meet through a **16-configuration corner Wang set** — the four
+corners of a cell each carry a terrain, which is Godot's
+`TERRAIN_MODE_MATCH_CORNERS`. Coverage is a thresholded bilinear blend of the
+four corner weights, so the boundary crosses any edge whose corners differ at
+its exact midpoint and two tiles laid side by side agree. Straight edges,
+outer corners, inner corners and diagonals all fall out of one formula
+(`terrain.coverage`) instead of sixteen hand-drawn cases.
+
+A ragged boundary tiles for one reason only, and it is the same invariant that
+makes a decayed cast joint tileable:
+
+> **A boundary is pinned to its ideal position at the tile edge, and may
+> wander only in the middle.**
+
+Let the noise reach the border and every join in the transition band shows a
+step — a visible grid drawn exactly where the eye is already looking. The
+property is verified exactly, for all masks at every amplitude.
+
+**The pair table is derived, not listed.** Each terrain declares a `family`
+(soft / hard) and a `kin` (the material it is a condition *of*), and the
+boundary's meaning follows: same kin is a **gradation** and carries no
+decoration at all; soft over hard means the made surface **fails** at the
+edge; hard against hard is a **cast joint** with almost no wander; soft
+against soft is ragged with vegetation leaning off the grassy side. Seven
+pairs were once written out by hand and the first three composed scenes asked
+for thirty — anything missing is a hole a level designer falls into.
+
+**Edge decoration is a minority event**, exactly as a mark on a field tile is.
+Tufts on every transition tile turn a boundary twenty cells long into a hedge
+of forty identical tufts.
+
+Masks 0 and 15 are not in the set: both mean the cell is entirely one terrain,
+which is that terrain's own field tile.
 
 Structure tiles are exempt (`surface = "structure"`), and deliberately so: a
 wall **should** show its cast joint and a fence **should** show its folds. Those
@@ -199,14 +298,31 @@ The key light is **fixed: upper-left** (`style.light`), above ground and below.
   makes ribbons, and a field of ribbons reads as camouflage — which is exactly
   what the first above-ground draft produced. Use `spread` 0 for a stone, ~0.4
   for mottling, 1.3+ for a drift or a stain.
-- A pixel with no same-coloured neighbour in its **8-cell neighbourhood** is a
-  stray. `isolated_pixels` caps strays at 6 per tile **and** at 4 % of opaque
-  pixels: both bounds apply, and the validator binds on whichever is tighter.
-  (Taking the looser of the two lets each bound excuse a breach of the other,
-  which is what the implementation used to do.)
-- Every generator ends with `pixel_utils.despeckle`, which absorbs strays. It
-  may never resolve one **into the outline colour**: beside a silhouette the
-  outline is the local majority, and letting it win eats the shape.
+- A **stray** is a pixel that belongs to no *mark*. The obvious definition —
+  "no same-coloured neighbour in its 8-cell neighbourhood" — is wrong, and it
+  condemned the grammar §5 requires: a stone is *a lit cap plus its own
+  shadow*, three pixels of three colours, so the anti-dust rule called the
+  documented anti-dust mark three pieces of dust, and `despeckle` then
+  destroyed it. Instead: the asset's commonest opaque colour is its
+  **background** (only if it covers ≥ ⅓ of the cell — a decal has no field);
+  every other opaque pixel is a **mark** pixel; mark pixels group
+  8-connected; and a group of **one** is a stray. Nothing else is.
+- `isolated_pixels` caps strays at 6 per tile **and** at 4 % of opaque pixels:
+  both bounds apply, and the validator binds on whichever is tighter. (Taking
+  the looser of the two lets each bound excuse a breach of the other.)
+- Every generator ends with cleanup, and there are four passes because wear
+  leaves four kinds of mess:
+  - `despeckle` absorbs a stray into the majority around it. It may never
+    resolve one **into the outline colour**: beside a silhouette the outline is
+    the local majority, and letting it win eats the shape;
+  - `strip_strays` **erases** a stray that has no opaque neighbour at all. On a
+    mostly-transparent asset there is nothing to vote with, so despeckle
+    leaves it and the asset ships with dust on it;
+  - `strip_orphan_outline` removes outline pixels left stranded by wear that
+    *removed* body (§9 draws the outline before wear on purpose);
+  - `fill_pinholes` fills single enclosed transparent cells — they appear
+    wherever strokes close a ring, and wherever the contact shadow lands a
+    pixel clear of the silhouette, so this one runs **last**.
 - Cracks, grain, scratches and stalks are **runs**, minimum 2–3 px, never dots.
 - A crack is a **fracture**, not a scribble: `pixel_utils.fracture` holds its
   heading for a segment of 3–5 px, kinks 45° at a joint, and throws branches at
@@ -224,14 +340,31 @@ caps it per **surface class**, which each generator declares:
 
 | `surface` | what it is | per-tile ceiling | measured here |
 | --- | --- | --- | --- |
-| `ground` | laid in fields; must be the calmest thing in the game | 0.30 | 0.23–0.28 |
-| `structure` | carries construction detail: joints, folds, fixings | 0.55 | 0.37–0.49 |
-| `prop` | adds a silhouette, an outline and internal structure | 0.60 | 0.56–0.58 |
+| `ground` | laid in fields; must be the calmest thing in the game | 0.30 | 0.09–0.24 |
+| `transition` | holds **two** ground surfaces plus their boundary | 0.38 | 0.10–0.36 |
+| `structure` | carries construction detail: joints, folds, fixings | 0.55 | 0.20–0.52 |
+| `prop` | adds a silhouette, an outline and internal structure | 0.65 | 0.24–0.63 |
+| `decal` | a sparse self-lit overlay | *none* — see below | |
+
+Two corrections to how this is measured, both of which changed what it means:
+
+- **The outline is excluded.** An outline is mandatory on a prop and differs
+  from every body colour, so counting body-against-outline pairs scored an
+  asset on its perimeter-to-area ratio rather than on its texture: a weed drawn
+  as four clean strokes measured 0.68 and a drum covered in corrosion 0.59,
+  which is exactly backwards.
+- **It only applies to an asset with a solid interior**
+  (`pixel_utils.interior_ratio` ≥ 0.20). On an asset that is mostly boundary —
+  a weed, a cable, a small low pile, every decal — nearly every adjacent pair
+  straddles a lit face and the measure saturates however carefully the thing is
+  drawn. That is why `decal` has no ceiling: the exemption is a consequence of
+  the same rule, not a special case. Those assets are held to their coverage
+  and silhouette rules instead.
 
 For ground the number that really matters is the **field** average
 (`style.grid.max_field_density` = 0.22), held at the level of the game's own
-authored platform field tiles (0.10–0.17). Individual tiles may carry a fracture; a
-hundred of them may not.
+authored platform field tiles (0.10–0.17); the nine terrains measure 0.09–0.21.
+Individual tiles may carry a fracture; a hundred of them may not.
 
 Two habits keep a surface under the ceiling: **fewer, larger marks** (one big
 cluster has far less edge per pixel than four small ones), and **letting most
@@ -288,6 +421,15 @@ A material owns the vocabulary of marks a surface may make. Generators
 | `dirt` | overlay | grime patches, `band` |
 | `debris` | overlay | chunks of whatever fell apart nearby |
 
+Three shared modules sit above the materials, and a generator composes them
+rather than reinventing what they own:
+
+| module | owns |
+| --- | --- |
+| `terrain.lua` | the 9 terrains, `terrain.field` (every ground tile), the corner-Wang autotile and the derived pair table |
+| `wear.lua` | the variation channels: `rust`, `dirt`, `staining`, `cracks`, `damage`, `missing`, `rubble`, `vegetation`. Coverage is a weighted list whose first entry is 0, so clean variants genuinely occur — and **nothing here moves an edge**, which is what keeps a variant the same object |
+| `object.lua` | the standing-object grammar: outline → wear → cleanup → contact shadow, and members (`upright`, `rail`, `box`, `cylinder`) drawn as explicit ramp steps |
+
 - Overlays take a `mask`; use `pixel_utils.ramp_mask("metal")` so rust lands on
   metal and not on an outline, a hole or a weed.
 - Overlays take a `bias(x, y) -> 0..1` saying **where wear collects**: seams,
@@ -308,6 +450,27 @@ A material owns the vocabulary of marks a surface may make. Generators
   fence post or a rail is a separate piece of steel, and shifting whatever
   happens to be underneath lets the sheet's fold pattern show straight through
   it (`metal.post`).
+- **A modular piece declares its edges, and the claim is checked.** A wall or
+  fence piece names what each of its four edges presents (`sockets`), and
+  `validators.check_sockets` verifies that every piece presenting a socket
+  agrees with every other on that edge's **opaque rows** and **base material**.
+  Wear is transparent to the check — grime or a weed at a join does not stop
+  two pieces meeting — and exact colour is not compared, because a joint
+  decays. Three consequences, all of which were bugs first:
+  - **sockets are direction-typed.** A left/right edge is a slice through a
+    run's *cross-section*; a top/bottom edge is a slice *along* it. One name
+    for both is a promise no piece can keep.
+  - **an edge where the run continues is not outlined and casts no contact
+    shadow.** Otherwise a run gets a black rule across its middle and the
+    middle of a wall is planted on the ground.
+  - **nothing may put material on a join that its neighbour does not have** —
+    including wear, which paints onto transparency and will otherwise drop a
+    weed into a neighbour's empty sky.
+- **Thin vegetation is not outlined.** An outline is one pixel and a stalk is
+  one pixel, so outlining a tuft spends more pixels on the border than on the
+  plant and the strokes weld into a dark blob. Light, not a border, is what
+  separates a plant from the ground. (A considered exception to §8, for assets
+  with no interior for an outline to sit around.)
 - **A material's marks have to relate to each other.** A fracture and the
   crumbled surface beside it are one piece of damage, so the breakup is seeded
   *on* the crack and the silt is biased *to* it. Marks placed independently
@@ -328,7 +491,13 @@ A material owns the vocabulary of marks a surface may make. Generators
   game changes the day you add a crack.
 - Variation belongs in **wear, damage, vegetation and placement**. Silhouette
   and structure stay constant, or a row of the same prop stops reading as the
-  same prop.
+  same prop. `wear.lua` owns the channels and none of them moves an edge.
+- **Both ends of that are enforced** (`style.variant_overlap`, checked by
+  `variant_similarity`). Variants that share too many pixels are the same
+  asset twice and a level built from them repeats visibly; variants that share
+  too *few* are not the same object any more. Byte-identical variants are
+  always a bug — it means the seed did nothing, which happens when an asset's
+  structure is fixed and every wear channel can roll to nothing.
 
 ## 12. Review
 
@@ -338,12 +507,33 @@ A material owns the vocabulary of marks a surface may make. Generators
   - the **repeat sheet** (`vary` off) — is the tile actually seamless?
   - the whole set **at 1×** — can you still tell a road from a field, and read
     a prop's silhouette?
-- Run the validators over at least 64 seeds: `lua5.4 art/tools/tests/run_tests.lua`,
-  or *Validate → Validate all generators* in Aseprite. `lua5.4 art/tools/export.lua`
-  writes every asset, both sheets, the grid report and `VALIDATION.md`.
-- The seven rules are `dimensions`, `alpha`, `palette`, `palette_size`,
-  `outline_thickness`, `texture_noise` and `isolated_pixels`. The four marked
-  `scope = "asset"` are skipped for preview sheets, which are review artefacts.
+- the **composed location previews** (`art/generated/scenes/`) — the only check
+  that sees the failures a single asset cannot have: repetition over a field,
+  **terrains that do not separate from each other**, scale disagreeing between
+  kits, palette drift, and prop density. Two of the worst defects this toolkit
+  has had were invisible until a whole scene was laid out.
+- Run the validators: `lua5.4 art/tools/tests/run_tests.lua` sweeps every
+  generator over twice the seeds it ships (`--full` for 64 each), and
+  `lua5.4 art/tools/export.lua` writes every asset, the sheets, the atlases,
+  the scenes, the grid report and `VALIDATION.md`.
+
+The rules, in three scopes:
+
+| scope | rules |
+| --- | --- |
+| per asset | `dimensions`, `alpha`, `palette`, `palette_size`, `outline_thickness`, `texture_noise`, `isolated_pixels`, `decal_coverage`, `decal_marks`, `prop_silhouette` |
+| per variant group | `variant_similarity` (too alike *and* too unalike), `tileable_border` |
+| across the library | `sockets` — every piece presenting a socket agrees with every other on that edge's opaque rows and base material |
+
+The rules marked `scope = "asset"` are skipped for preview sheets and scenes,
+which are review artefacts; the pixel-level rules still apply to them.
+
+A note on scope, because getting it wrong produced unsound tests twice.
+"Do these variants repeat?" is a statement about a **set**. "Does this
+generator avoid the tile border?" is a **statistic** of a generator — measured
+on the three variants a transition tile ships it failed `dirt_ground`, which is
+correct art. And "do these two pieces connect?" is inherently about a **pair**,
+so it cannot live on either one.
 
 ---
 
@@ -351,11 +541,30 @@ A material owns the vocabulary of marks a surface may make. Generators
 
 1. Create `art/tools/generators/<name>.lua` returning the contract at the top of
    `generators/init.lua` — including `surface`, which sets its busyness ceiling
-   and, for `ground`, commits it to §2.
-2. Add `"<name>"` to `generators.names`.
-3. Compose materials in the §9 draw order; take every random decision from the
-   rng stream you were handed.
+   and, for `ground`, commits it to §2, and `category`, which fixes its output
+   directory and its layer/collision defaults. Return a **list** of generators
+   instead of one if it is a kit whose pieces share an implementation; that is
+   what keeps 615 transition tiles from being 615 files.
+2. Add the module name to `generators.modules`.
+3. Compose materials and the shared modules in the §9 draw order; take every
+   random decision from the rng stream you were handed. A ground tile is
+   `terrain.field`; an object ends with `object.finish`; wear is declared as
+   channels and applied by `wear.lua`.
 4. `lua5.4 art/tools/export.lua <name>:8` and **look at the sheets**.
+
+To add a **terrain**, register it in `terrain.lua` with a `family` and a `kin`
+— its transition pairs against every compatible terrain are generated for you.
+To add a **modular piece**, declare its `sockets` and `check_sockets` will hold
+you to them.
+
+`surface` and `category` are different axes, and conflating them causes real
+trouble. Surface says what *kind* of thing an asset is for validation;
+category says what it *is* for the level. Thin vegetation is `vegetation` by
+category and `decal` by surface — held to the prop rules it fails
+`min_occupancy` for being small and `max_interior_holes` for the gaps between
+its own stems, which are the asset. A collapsed wall piece is `wall` by
+category and `prop` by surface, because a mound silhouette drawn per column
+steps at every column by construction.
 
 ```lua
 local P = require("pixel_utils")

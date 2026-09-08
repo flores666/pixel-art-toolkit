@@ -89,42 +89,109 @@ fence piece names what each edge presents (`sockets`), and
 agrees with every other on that edge's opaque rows and base material. That
 check found nine real bugs that are invisible in a single tile.
 
-## Run it without Aseprite
+## Commands
 
-The whole toolkit is plain Lua 5.4 apart from `aseprite.lua`, so the tests and
-previews run in a terminal:
+Everything runs in plain Lua 5.4 apart from `aseprite.lua`, so the tests,
+previews and the whole export run in a terminal.
 
-```sh
-lua5.4 art/tools/tests/run_tests.lua              # 29 tests: palette, rng,
-                                                  # primitives, materials,
-                                                  # generators, validators
-lua5.4 art/tools/tests/run_tests.lua --dump /tmp/art   # + PPM preview sheets
-```
-
-`--dump` writes, per generator, a varied 10×10 sheet, a single-seed tiling
-check and a 12× single tile. Look at them; the validators cannot tell you
-whether the art is any good.
-
-To produce game-ready files, use the exporter (pure Lua, writes real PNGs — no
-Aseprite and no Python needed):
+### Generate all assets
 
 ```sh
-lua5.4 art/tools/export.lua                                # every generator, 8 variants each
-lua5.4 art/tools/export.lua dirt_ground:8 rusted_barrel:6  # pick and choose
-lua5.4 art/tools/export.lua --seed 200 --out /tmp/art      # a different batch, elsewhere
+lua5.4 art/tools/export.lua
 ```
 
-It writes to `art/generated/` (override with `--out`):
+Writes to `art/generated/` — 2702 assets, 41 transition atlases, 220 review
+sheets and the 3 location previews. Exits non-zero if anything fails
+validation, so it drops straight into CI.
 
-| path | what |
-| --- | --- |
-| `tiles/<name>_<seed>.png` | one file per asset, 1×, RGBA, game-ready |
-| `sheets/<name>_field.png` | 10×10, one seed per tile — the variation range |
-| `sheets/<name>_repeat.png` | 10×10, one seed repeated — the tiling check |
-| `sheets/comparison.png`, `comparison_x8.png` | every asset in the run, one row per generator |
-| `VALIDATION.md` | the validator report, plus the grid-visibility measurements |
+### Generate one category, or one generator
 
-The exporter exits non-zero if anything fails validation, so it drops straight
+```sh
+lua5.4 art/tools/export.lua decal                  # a whole category
+lua5.4 art/tools/export.lua vegetation rubble       # several
+lua5.4 art/tools/export.lua rusted_barrel:12        # one generator, 12 variants
+lua5.4 art/tools/export.lua --no-scenes --no-sheets # assets only (fastest)
+```
+
+Category names are `ground`, `transition`, `decal`, `vegetation`, `rock`,
+`wall`, `fence`, `road`, `industrial`, `prop`, `rubble`.
+
+### Change seeds
+
+```sh
+lua5.4 art/tools/export.lua --seed 200              # a different batch
+lua5.4 art/tools/export.lua --seed 200 --out /tmp/art
+```
+
+An asset is a pure function of (generator name, seed) — forever, because
+levels reference tiles by seed. Re-running with the same arguments reproduces
+the same bytes.
+
+### Run validation
+
+```sh
+lua5.4 art/tools/tests/run_tests.lua                # 25 tests, ~35s
+lua5.4 art/tools/tests/run_tests.lua --full         # 64 seeds per generator
+lua5.4 art/tools/tests/run_tests.lua --seeds 40     # a specific sweep depth
+```
+
+The suite sweeps every generator over twice the seeds it ships (floored at 8,
+capped at 24), runs every per-asset rule, the two variant-group rules and the
+library-wide socket check. `export.lua` validates every variant it actually
+writes and puts the report in `art/generated/VALIDATION.md`.
+
+### Generate previews
+
+```sh
+lua5.4 art/tools/export.lua                         # sheets + scenes included
+lua5.4 art/tools/tests/run_tests.lua --dump /tmp/art   # PPM sheets, no PNG writer
+```
+
+`art/generated/sheets/` gets a 10×10 field sheet and a repeat (tiling) sheet
+per generator, a per-category comparison strip at 1× and 8×, and the palette.
+`art/generated/scenes/` gets the three composed locations at 1× and 3×.
+
+**Look at the scenes.** They are the only check that sees the failures a
+single asset cannot have: repetition over a field, terrains that do not
+separate from each other, scale disagreeing between kits, and prop density.
+
+### Godot-ready output
+
+`art/generated/manifest.json` — every asset, with `id`, `generator`, `seed`,
+`category`, `surface`, `path`, dimensions, tile footprint, `tileable`,
+`layer`, `collision`, `variant_group`, and for autotile pieces the terrain
+pair, corner mask, per-edge terrain and atlas cell.
+
+`art/generated/tileset.json` — the palette as hex ramps, the 9 terrains, the
+35 pairs with their atlas paths, the corner-mask convention
+(`match_corners`, matching Godot's `TERRAIN_MODE_MATCH_CORNERS`), the socket
+table, and the layer/collision vocabularies.
+
+Transition pieces ship as one atlas per pair, 14 columns (corner masks 1–14)
+by 3 rows (variants) — the shape a `TileSetAtlasSource` expects. Nothing in
+this repo writes into the game project; the importer is the game's business.
+
+### Adding a new generator later
+
+1. Create `art/tools/generators/<name>.lua` returning the contract at the top
+   of `generators/init.lua` — `name`, `title`, `size`, `tileable`, `surface`,
+   `build`, plus `category` where it differs from the surface class. Return a
+   **list** of generators instead of one if it is a kit whose pieces share an
+   implementation.
+2. Add the module name to `generators.modules`.
+3. Compose materials in the ART_STYLE.md §9 draw order and take every random
+   decision from the rng stream you were handed. For a ground tile call
+   `terrain.field`; for an object end with `object.finish`; for wear declare
+   channels and let `wear.lua` apply them.
+4. `lua5.4 art/tools/export.lua <name>:8` and **look at the sheets**.
+
+To add a terrain, register it in `terrain.lua` with a `family` and a `kin` —
+its transition pairs against every compatible terrain are then generated for
+you. To add a modular piece, declare its `sockets`; `check_sockets` will hold
+you to them.
+
+## Run it inside Aseprite
+
 into CI.
 
 ## Using it from Lua
