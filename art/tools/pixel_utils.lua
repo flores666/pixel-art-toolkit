@@ -609,6 +609,182 @@ function P.despeckle(surface, opts)
   return fixed
 end
 
+--- Erase stray pixels instead of recolouring them.
+--
+-- `despeckle` votes a stray into the majority colour around it, which is the
+-- right fix inside a solid body. On a mostly-TRANSPARENT asset -- a decal, a
+-- prop's fringe -- a stray usually has no opaque neighbour to vote at all, so
+-- despeckle leaves it exactly where it is and the asset ships with dust on it.
+-- The honest fix there is deletion: a mark that ended up one pixel wide was
+-- never a mark.
+--
+-- It erases a pixel only when the pixel is a stray by P.isolated AND has no
+-- opaque 8-neighbour at all -- a true floater. A stray that is attached to
+-- something is part of a mark, however odd its colour, and deleting it would
+-- punch a hole in the mark instead of cleaning up after it.
+--
+-- opts.keep(x, y, colour) protects deliberate single pixels.
+-- @return number of pixels erased
+function P.strip_strays(surface, opts)
+  opts = opts or {}
+  local erased = 0
+  local function attached(x, y)
+    for dy = -1, 1 do
+      for dx = -1, 1 do
+        if (dx ~= 0 or dy ~= 0) and surface:is_opaque(x + dx, y + dy) then return true end
+      end
+    end
+    return false
+  end
+  for _, p in ipairs(P.isolated(surface, opts)) do
+    if not attached(p.x, p.y) and not (opts.keep and opts.keep(p.x, p.y, p.color)) then
+      surface:set(p.x, p.y, palette.TRANSPARENT)
+      erased = erased + 1
+    end
+  end
+  return erased
+end
+
+--- Opaque fraction of the surface, 0..1.
+function P.coverage(surface)
+  local _, opaque = P.histogram(surface)
+  return opaque / (surface.width * surface.height)
+end
+
+--- Connected components of OPAQUE pixels, 4-neighbour.
+--
+-- What "one mark" means, mechanically. A decal is supposed to be one thing --
+-- a clump, a stain, three pebbles together -- and a prop is supposed to be one
+-- object; counting islands is how a validator can tell that from a scatter,
+-- which no per-pixel rule can. Wrapping surfaces wrap, so a cluster clipped by
+-- a tile edge counts as the one component it will be once laid.
+-- @return list of components, each { size = n, pixels = { {x,y}, ... } }
+function P.components(surface, opts)
+  opts = opts or {}
+  local wrap = opts.wrap
+  if wrap == nil then wrap = surface.wrap end
+  local probe = surface
+  if wrap ~= surface.wrap then probe = surface:clone(); probe.wrap = wrap end
+  local seen, out = {}, {}
+  local function key(x, y)
+    local nx, ny = probe:norm(x, y)
+    if not nx then return nil end
+    return ny * surface.width + nx
+  end
+  for x, y, c in surface:pixels() do
+    local k = key(x, y)
+    if c ~= palette.TRANSPARENT and k and not seen[k] then
+      local pixels, stack = {}, { { x, y } }
+      seen[k] = true
+      while #stack > 0 do
+        local cell = table.remove(stack)
+        pixels[#pixels + 1] = cell
+        for _, d in ipairs { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } } do
+          local nx, ny = cell[1] + d[1], cell[2] + d[2]
+          local nk = key(nx, ny)
+          if nk and not seen[nk] and probe:get(nx, ny) ~= palette.TRANSPARENT then
+            seen[nk] = true
+            stack[#stack + 1] = { nx, ny }
+          end
+        end
+      end
+      out[#out + 1] = { size = #pixels, pixels = pixels }
+    end
+  end
+  table.sort(out, function(a, b) return a.size > b.size end)
+  return out
+end
+
+--- MARKS: how many separate things a sparse asset appears to be.
+--
+-- `components` answers a different question and answers it too strictly for
+-- this one. It is 4-connected, so a diagonal fracture -- one mark by any
+-- reading -- counts as one component per pixel; and it has no notion of
+-- proximity, so a tuft whose stalks are deliberately spaced two apart
+-- (ART_STYLE.md 10, or a shared lean welds them into a blob) counts as three
+-- marks rather than one clump.
+--
+-- What actually matters for a decal is whether it reads as ONE thing in ONE
+-- place or as a scatter across the cell. So marks are grouped 8-connected --
+-- a diagonal run is one mark -- and with a GAP tolerance, so pixels close
+-- enough to read together are one mark whether or not they touch.
+-- @param opts { gap = px, default 2 }
+-- @return list of { size = n, pixels = { {x,y}, ... } }, largest first
+function P.mark_groups(surface, opts)
+  opts = opts or {}
+  local gap = opts.gap or 2
+  local w, h = surface.width, surface.height
+  local seen, out = {}, {}
+  for x, y, c in surface:pixels() do
+    local k = y * w + x
+    if c ~= palette.TRANSPARENT and not seen[k] then
+      local pixels, stack = {}, { { x, y } }
+      seen[k] = true
+      while #stack > 0 do
+        local cell = table.remove(stack)
+        pixels[#pixels + 1] = cell
+        for dy = -gap, gap do
+          for dx = -gap, gap do
+            if dx ~= 0 or dy ~= 0 then
+              local nx, ny = cell[1] + dx, cell[2] + dy
+              if nx >= 0 and ny >= 0 and nx < w and ny < h then
+                local nk = ny * w + nx
+                if not seen[nk] and surface:is_opaque(nx, ny) then
+                  seen[nk] = true
+                  stack[#stack + 1] = { nx, ny }
+                end
+              end
+            end
+          end
+        end
+      end
+      out[#out + 1] = { size = #pixels, pixels = pixels }
+    end
+  end
+  table.sort(out, function(a, b) return a.size > b.size end)
+  return out
+end
+
+--- Enclosed transparent regions: transparent components that do not reach the
+--- border of the surface.
+--
+-- A bin has a mouth and a fence has a rust hole, so holes are legitimate -- but
+-- they have to be DRAWN. A prop that comes out with six of them has been eaten
+-- by its own wear overlays, and that is a defect no colour rule can see.
+-- @return list of { size = n, pixels = { {x,y}, ... } }
+function P.holes(surface)
+  local w, h = surface.width, surface.height
+  local seen, out = {}, {}
+  for y = 0, h - 1 do
+    for x = 0, w - 1 do
+      local k = y * w + x
+      if surface:get(x, y) == palette.TRANSPARENT and not seen[k] then
+        local pixels, stack, open = {}, { { x, y } }, false
+        seen[k] = true
+        while #stack > 0 do
+          local cell = table.remove(stack)
+          pixels[#pixels + 1] = cell
+          if cell[1] == 0 or cell[2] == 0 or cell[1] == w - 1 or cell[2] == h - 1 then
+            open = true
+          end
+          for _, d in ipairs { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } } do
+            local nx, ny = cell[1] + d[1], cell[2] + d[2]
+            if nx >= 0 and ny >= 0 and nx < w and ny < h then
+              local nk = ny * w + nx
+              if not seen[nk] and surface:get(nx, ny) == palette.TRANSPARENT then
+                seen[nk] = true
+                stack[#stack + 1] = { nx, ny }
+              end
+            end
+          end
+        end
+        if not open then out[#out + 1] = { size = #pixels, pixels = pixels } end
+      end
+    end
+  end
+  return out
+end
+
 --- Fraction of neighbouring opaque pixel pairs whose colour differs: a plain
 -- measure of how busy a surface is. The game's own hand-authored platform field
 -- tiles sit at 0.10-0.17 and its wall faces near 0.25; generated texture that
@@ -656,12 +832,40 @@ function P.color_count(surface)
   return n
 end
 
---- Opaque pixels with no neighbour of the same colour in the full 8-cell
--- neighbourhood -- i.e. true stray pixels. Diagonal contact counts, so an
--- ordered dither (a checkerboard of same-coloured diagonals) is legitimate
--- while a lone speck is not. On a wrapping surface the neighbourhood wraps
--- too, so a cluster clipped by a tile edge is judged as the cluster it will
--- be once tiled.
+--- True stray pixels: dust that is not part of any mark.
+--
+-- The definition matters, and the obvious one is wrong. "An opaque pixel with
+-- no neighbour of the same colour" condemns the grammar ART_STYLE.md §5
+-- actually mandates: a stone is *a lit cap plus its own shadow*, and that is
+-- three pixels of three different colours, so the naive rule called the
+-- documented anti-dust mark three pieces of dust. Every small shaded mark in
+-- the toolkit -- a stone, a chunk of debris, a tuft with a lit tip, a rivet --
+-- hit the same problem, and on a mostly-transparent asset (a decal) where the
+-- proportional cap is one or two pixels it was fatal.
+--
+-- So a stray is defined against the MARK it belongs to rather than against its
+-- own colour:
+--
+--   * the asset's most common opaque colour is its BACKGROUND -- the field of
+--     a ground tile, the body of a prop -- but only if it actually behaves
+--     like a field, i.e. covers a real share of the cell. On a decal there is
+--     no field at all: the commonest colour there is just part of a mark, and
+--     treating it as background split every mark into pieces and condemned
+--     each piece as dust. Below the threshold, every opaque pixel is a mark
+--     pixel and only a true floater is a stray;
+--   * every other opaque pixel is a MARK pixel. Mark pixels are grouped by
+--     8-connectivity, which is what puts a cap, its shade and its shadow into
+--     one group;
+--   * a group of ONE is a stray. Nothing else is.
+--
+-- That still catches exactly what the rule exists to catch -- a lone pixel of
+-- an unrelated colour dropped on a field, which is what AI dust and careless
+-- speckle look like -- while a two-pixel mark remains the documented minimum
+-- (style.speck_min) and passes.
+--
+-- Diagonal contact counts, so an ordered dither (same-coloured diagonals) is
+-- legitimate. On a wrapping surface the neighbourhood wraps too, so a cluster
+-- clipped by a tile edge is judged as the cluster it will be once tiled.
 function P.isolated(surface, opts)
   opts = opts or {}
   local wrap = opts.wrap
@@ -670,16 +874,57 @@ function P.isolated(surface, opts)
   if wrap ~= surface.wrap then
     probe = surface:clone(); probe.wrap = wrap
   end
-  local out = {}
+
+  -- background = the most common opaque colour, tie-broken on the packed value
+  -- so the answer is deterministic -- and only when it covers enough of the
+  -- cell to BE a field. A third of the surface is well below the 70-82% the
+  -- game's own field tiles hold at one colour, and well above anything a
+  -- sparse overlay reaches.
+  local hist, opaque = P.histogram(surface)
+  if opaque == 0 then return {} end
+  local background, best = nil, -1
+  for c, n in pairs(hist) do
+    if n > best or (n == best and background and c < background) then background, best = c, n end
+  end
+  if best < surface.width * surface.height * 0.33 then background = nil end
+
+  local function is_mark(x, y)
+    local c = probe:get(x, y)
+    return c ~= palette.TRANSPARENT and c ~= background
+  end
+
+  local seen, out = {}, {}
+  local function key(x, y)
+    local nx, ny = probe:norm(x, y)
+    if not nx then return nil end
+    return ny * surface.width + nx
+  end
+
   for x, y, c in surface:pixels() do
-    if c ~= palette.TRANSPARENT then
-      local touched = false
-      for dy = -1, 1 do
-        for dx = -1, 1 do
-          if (dx ~= 0 or dy ~= 0) and probe:get(x + dx, y + dy) == c then touched = true end
+    local k = key(x, y)
+    if c ~= palette.TRANSPARENT and c ~= background and k and not seen[k] then
+      -- flood the mark this pixel belongs to, 8-connected
+      local group, stack = {}, { { x, y } }
+      seen[k] = true
+      while #stack > 0 do
+        local cell = table.remove(stack)
+        group[#group + 1] = cell
+        for dy = -1, 1 do
+          for dx = -1, 1 do
+            if dx ~= 0 or dy ~= 0 then
+              local nx, ny = cell[1] + dx, cell[2] + dy
+              local nk = key(nx, ny)
+              if nk and not seen[nk] and is_mark(nx, ny) then
+                seen[nk] = true
+                stack[#stack + 1] = { nx, ny }
+              end
+            end
+          end
         end
       end
-      if not touched then out[#out + 1] = { x = x, y = y, color = c } end
+      if #group == 1 then
+        out[#out + 1] = { x = group[1][1], y = group[1][2], color = surface:get(group[1][1], group[1][2]) }
+      end
     end
   end
   return out

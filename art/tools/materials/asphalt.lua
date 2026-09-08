@@ -53,6 +53,63 @@ function asphalt.fill(surface, rng_stream, opts)
     grime:range(area.x, area.x + area.w - 1), grime:range(area.y, area.y + area.h - 1),
     grime:range(math.floor(field * 0.16), math.floor(field * 0.24)),
     palette.resolve(opts.grime or "metal_4"), grime, { mask = mask, spread = 1.1 })
+
+  -- `ruin` (0..1): comprehensively degraded tarmac -- the CONDITION of a road
+  -- that has failed, not the individual holes in it.
+  --
+  -- That division took three attempts to see. A tile wraps against ITSELF, so
+  -- its left edge has nothing to do with its neighbour's, and ART_STYLE.md 2
+  -- states the consequence plainly: a broad continuous form cannot cross a
+  -- tile boundary, so the only things that survive repetition are texture too
+  -- quiet to count and marks that read as objects. Anything else laid a
+  -- hundred times becomes a pattern at the tile pitch.
+  --
+  --   * many small break-outs per tile -> uniform grey static (field 0.234,
+  --     over the ceiling, and nothing on it read as damage because nothing
+  --     was left whole);
+  --   * one LARGE break-out per tile -> leopard spots on a 16px pitch, which
+  --     is the failure mode ART_STYLE.md 2 names in as many words. It
+  --     measured fine (0.196) and looked worse.
+  --
+  -- So the terrain carries the condition and nothing else: a dense network of
+  -- hairline fracturing and low-contrast patching, quiet enough to tile a
+  -- hundred times. The HOLES are `decal_pothole` and `decal_rubble`, placed
+  -- where the level wants them -- which is the same split that made the
+  -- ordinary field tiles work, applied to the extreme end of the same road.
+  local ruin = opts.ruin or 0
+  if ruin > 0 then
+    local fail = rng_stream:branch("asphalt_ruin")
+    -- Fracturing over the whole tile: this is the read. It has to be QUIET,
+    -- and the asphalt ramp cannot do quiet -- its steps are 18 luminance
+    -- apart, so a network drawn one step down is a web of hard black lines
+    -- and a field of it measured 0.285 against the 0.22 ceiling.
+    --
+    -- metal_3 sits 11 luminance under asphalt_3 and is just as neutral, so
+    -- the same network reads as crazing in the surface rather than as drawn
+    -- lines. This is the near-value-neighbour rule of ART_STYLE.md 2 applied
+    -- to a structure instead of to a fill: value contrast is reserved for
+    -- damage, and comprehensive crazing is a CONDITION, not damage.
+    -- One or two per tile, not five. At five the field measured 0.253 against
+    -- the 0.22 ceiling; at two, 0.224 -- still over, and with no headroom for
+    -- a seed the sweep did not try. At one-plus-ruin it lands at 0.184, which
+    -- leaves room, and the read does not suffer: the crazing on any one cell
+    -- was never the point, the accumulation across the field is, and adjacent
+    -- cells supply that for free.
+    local crazing = palette.resolve(opts.crazing or "metal_3")
+    for _ = 1, 1 + math.floor(ruin * 1.0) do
+      P.fracture(surface,
+        fail:range(area.x, area.x + area.w - 1), fail:range(area.y, area.y + area.h - 1),
+        fail:range(6, 11), crazing, fail,
+        { mask = mask, branches = 1, segment = { 3, 5 }, branch_length = { 3, 5 } })
+    end
+    -- One patch where the surface has worn thin, in the same near-value
+    -- neighbour: at field scale this reads as a road mottled with old repairs
+    -- rather than as a mark on every cell.
+    P.cluster(surface,
+      fail:range(area.x, area.x + area.w - 1), fail:range(area.y, area.y + area.h - 1),
+      fail:range(math.floor(field * 0.10), math.floor(field * 0.18)),
+      crazing, fail, { mask = mask, spread = 1.3 })
+  end
 end
 
 --- A crack. A fracture: straight segments, 45-degree kinks, one branch.

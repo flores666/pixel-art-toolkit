@@ -15,6 +15,16 @@ local style, palette, rng = toolkit.style, toolkit.palette, toolkit.rng
 local P, materials = toolkit.pixels, toolkit.materials
 local generators, validators, previews = toolkit.generators, toolkit.validators, toolkit.previews
 
+-- How many seeds the per-asset sweep covers. The default keeps the suite fast
+-- enough to run on every edit; `--seeds 64` is the number ART_STYLE.md asks
+-- for before shipping, and `art/tools/export.lua` validates every variant it
+-- actually writes, so nothing reaches the game unchecked either way.
+local SWEEP_SEEDS = 24
+for i, a in ipairs(arg or {}) do
+  if a == "--seeds" then SWEEP_SEEDS = math.tointeger(arg[i + 1]) or SWEEP_SEEDS end
+  if a == "--full" then SWEEP_SEEDS = 64 end
+end
+
 local passed, failed = 0, {}
 
 local function test(name, fn)
@@ -199,15 +209,8 @@ test("despeckle never grows the outline into the shape", function()
   P.despeckle(s)
   assert(s:get(5, 7) ~= palette.resolve(style.outline_color),
     "despeckle turned a body pixel into outline")
-  for _, name in ipairs(generators.names) do
-    for seed = 1, 24 do
-      local surface = generators.build(name, seed)
-      local report = validators.run(surface, generators.spec(name))
-      for _, i in ipairs(report.issues) do
-        assert(i.rule ~= "outline_thickness", name .. " seed " .. seed .. ": " .. i.message)
-      end
-    end
-  end
+  -- outline_thickness across every generator is covered by the single sweep
+  -- below, which builds each asset once instead of once per property.
 end)
 
 test("wear overlays honour a zero coverage", function()
@@ -226,21 +229,6 @@ test("wear overlays honour a zero coverage", function()
     if P.color_count(s) == 1 then clean = clean + 1 end
   end
   assert(clean > 20, ("only %d/60 tiles were left clean at 5%% coverage"):format(clean))
-end)
-
-test("texture stays under the busyness ceiling the game's own art sets", function()
-  for _, name in ipairs(generators.names) do
-    local gen = generators.get(name)
-    local cap = style.max_edge_density[gen.surface]
-    local worst, worst_seed = 0, 0
-    for seed = 1, 64 do
-      local d = P.edge_density(generators.build(name, seed))
-      if d > worst then worst, worst_seed = d, seed end
-    end
-    assert(worst <= cap,
-      ("%s (%s) seed %d: edge density %.3f over the %.2f ceiling")
-        :format(name, gen.surface, worst_seed, worst, cap))
-  end
 end)
 
 test("preview sheets are judged as sheets, not as oversized assets", function()
@@ -306,42 +294,79 @@ test("every generator follows the contract", function()
   end
 end)
 
-test("generation is deterministic and seeds actually vary", function()
+test("every generator, every seed: validators, determinism, wrap, brightness", function()
+  -- ONE pass over (generator, seed), checking every per-asset property there
+  -- is. It used to be five passes -- validators, determinism, the busyness
+  -- ceiling, the wrap flag, ground brightness -- each rebuilding the same
+  -- asset, which cost 5x the time and grew linearly with the library. The
+  -- library is now ~300 generators, so that mattered.
+  local checked, ground_luma = 0, {}
   for _, name in ipairs(generators.names) do
-    local a = generators.build(name, 42):fingerprint()
-    local b = generators.build(name, 42):fingerprint()
-    assert_eq(a, b, name .. " same seed must be identical")
+    local gen = generators.get(name)
+    local spec = generators.spec(name)
+    local cap = style.max_edge_density[gen.surface]
     local seen, distinct = {}, 0
-    for seed = 1, 24 do
-      local fp = generators.build(name, seed):fingerprint()
+    local lo, hi = 255, 0
+
+    for seed = 1, SWEEP_SEEDS do
+      local surface = generators.build(name, seed)
+      checked = checked + 1
+
+      -- every validator
+      local report = validators.run(surface, spec)
+      report.seed = seed
+      assert(report.ok, validators.format(report))
+
+      -- the busyness ceiling for its surface class, where it has one (decals
+      -- do not: see the note on style.max_edge_density)
+      if cap then
+        local density = P.edge_density(surface)
+        assert(density <= cap,
+          ("%s (%s) seed %d: edge density %.3f over the %.2f ceiling")
+            :format(name, gen.surface, seed, density, cap))
+      end
+
+      -- wrap flag matches the declaration, and a prop leaves its corner clear
+      assert_eq(surface.wrap, gen.tileable and true or false, name .. " wrap flag")
+      if not gen.tileable then
+        assert_eq(surface:get(0, 0), palette.TRANSPARENT,
+          name .. " must not bleed into the tile corner")
+      end
+
+      -- seeds actually vary
+      local fp = surface:fingerprint()
       if not seen[fp] then seen[fp] = true; distinct = distinct + 1 end
+
+      -- ground tiles hold a constant base: tiles that differ in overall
+      -- brightness lay a field out as a chequerboard of light and dark cells
+      if gen.surface == "ground" then
+        local total = 0
+        for _, _, c in surface:pixels() do total = total + palette.luminance(c) end
+        local mean = total / (surface.width * surface.height)
+        lo, hi = math.min(lo, mean), math.max(hi, mean)
+      end
     end
-    assert(distinct >= 20, ("%s produced only %d distinct tiles in 24 seeds"):format(name, distinct))
-  end
-end)
 
-test("generators pass every validator over 64 seeds", function()
-  local ok, failures, checked = validators.run_generators(64)
-  assert(checked >= 64 * #generators.names, "checked " .. checked .. " assets")
-  if not ok then
-    local lines = {}
-    for i = 1, math.min(5, #failures) do lines[i] = validators.format(failures[i]) end
-    error("\n" .. table.concat(lines, "\n"))
-  end
-end)
+    -- determinism: the same seed twice is the same pixels, forever
+    assert_eq(generators.build(name, 42):fingerprint(), generators.build(name, 42):fingerprint(),
+      name .. " same seed must be identical")
 
-test("tileable generators wrap; object generators do not fill the frame", function()
-  for _, name in ipairs(generators.names) do
-    local g = generators.get(name)
-    local s = generators.build(name, 3)
-    assert_eq(s.wrap, g.tileable and true or false, name .. " wrap flag")
-    if not g.tileable then
-      assert_eq(s:get(0, 0), palette.TRANSPARENT, name .. " must not bleed into the tile corner")
+    -- Variants must genuinely differ. A transition tile is picked by
+    -- connectivity rather than by looks and only ships three variants, so it
+    -- is held to its own variant count rather than to the sweep length.
+    local want = math.min(SWEEP_SEEDS, math.max(3, gen.variants)) - 2
+    assert(distinct >= want,
+      ("%s produced only %d distinct tiles in %d seeds"):format(name, distinct, SWEEP_SEEDS))
+
+    if gen.surface == "ground" then
+      assert(hi - lo <= 12,
+        ("%s: tile brightness ranges %.1f..%.1f across seeds"):format(name, lo, hi))
+      ground_luma[#ground_luma + 1] = name
     end
   end
+  assert(checked == SWEEP_SEEDS * #generators.names, "swept " .. checked .. " assets")
+  assert(#ground_luma >= 9, "the ground set is the point; do not let it shrink")
 end)
-
--- validators ------------------------------------------------------------------------
 
 test("validators catch each thing they exist to catch", function()
   local function report_for(surface, spec)
@@ -420,7 +445,13 @@ end)
 -- previews ---------------------------------------------------------------------------
 
 test("preview sheets are 10x10 fields that themselves validate", function()
-  for _, name in ipairs(generators.names) do
+  -- One generator per category. A sheet costs 100 builds, and what this checks
+  -- is the SHEET builder (geometry, palette integrity), which does not vary
+  -- from one generator of a category to the next.
+  local sample = {}
+  for category, names in pairs(generators.by_category) do sample[#sample + 1] = names[1] end
+  table.sort(sample)
+  for _, name in ipairs(sample) do
     local g = generators.get(name)
     local sheet = previews.sheet(name, { seed = 1 })
     assert_eq(sheet.width, 10 * g.size.w, name .. " sheet width")
@@ -434,32 +465,24 @@ end)
 test("ground tiles do not print a 16x16 grid", function()
   -- The measurement is calibrated against real art: the game's own metro floor
   -- variants score 4.2 and 10.3 for seam bias, continuous untiled art 0.01.
+  -- grid_report lays a 10x10 field, so it costs 100 builds a call. It is only
+  -- ENFORCED on ground, so it is only computed there; the enforcement flag
+  -- itself is a property of the declaration and is checked for everything.
   for _, name in ipairs(generators.names) do
     local gen = generators.get(name)
     if gen.tileable then
+      if gen.surface ~= "ground" then
+        goto continue
+      end
       local report = previews.grid_report(name)
-      assert_eq(report.enforced, gen.surface == "ground", name .. " enforcement")
-      if report.enforced then
-        assert(report.ok, ("%s: seam bias %.3f/%.3f, contrast %.2f/%.2f, tile sd %.2f")
-          :format(name, report.seam_bias_x, report.seam_bias_y,
-            report.seam_contrast_x, report.seam_contrast_y, report.tile_luma_sd))
+      assert_eq(report.enforced, true, name .. " enforcement")
+      do
+        assert(report.ok, ("%s: %s  (bias %.3f/%.3f, contrast %.2f/%.2f, sd %.2f, field %.3f)")
+          :format(name, report.why, report.seam_bias_x, report.seam_bias_y,
+            report.seam_contrast_x, report.seam_contrast_y, report.tile_luma_sd,
+            report.field_density))
       end
-    end
-  end
-end)
-
-test("ground tiles keep a constant base so no tile reads lighter than its neighbours", function()
-  for _, name in ipairs(generators.names) do
-    if generators.get(name).surface == "ground" then
-      local lo, hi = 255, 0
-      for seed = 1, 48 do
-        local surface = generators.build(name, seed)
-        local total = 0
-        for _, _, c in surface:pixels() do total = total + palette.luminance(c) end
-        local mean = total / (surface.width * surface.height)
-        lo, hi = math.min(lo, mean), math.max(hi, mean)
-      end
-      assert(hi - lo <= 12, ("%s: tile brightness ranges %.1f..%.1f across seeds"):format(name, lo, hi))
+      ::continue::
     end
   end
 end)

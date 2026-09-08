@@ -56,8 +56,49 @@ style.max_isolated_ratio = 0.04    -- never more than 4% of opaque pixels
 --              FIELD, and style.grid.max_field_density enforces that;
 --   structure  carries construction detail: joints, folds, fixings;
 --   prop       adds a silhouette, an outline and internal structure.
-style.max_edge_density = { ground = 0.30, structure = 0.55, prop = 0.60 }
+--   decal      a transparent overlay dropped ON TOP of ground. It carries a
+--              mark and nothing else, so almost all of it is transparent and
+--              the busyness of the few pixels it does own is allowed to be
+--              high -- the calm around it comes from the ground underneath.
+--
+-- `decal` is deliberately ABSENT, and that is a finding rather than an
+-- omission. edge_density is the fraction of adjacent opaque pairs that differ,
+-- and a decal is a handful of pixels each of which carries its own lit cap and
+-- its own cast shadow (ART_STYLE.md 5) -- so on a correctly drawn three-pixel
+-- stone essentially every adjacent pair differs and the measure reads ~1.0.
+-- It cannot distinguish a good decal from a bad one; it only reports that the
+-- asset is small. Decals are held to `style.decal` instead, which measures the
+-- things that actually go wrong: how much of the cell it covers and how many
+-- separate marks it breaks into.
+--
+-- The `prop` ceiling was 0.60, measured against output from a `despeckle` that
+-- was silently destroying deliberate detail: the old stray test condemned any
+-- pixel with no same-coloured neighbour, which is precisely the documented
+-- grammar for a stone (a lit cap plus its own shadow, ART_STYLE.md 5) and for
+-- a rivet catch-light. With that fixed, detail survives cleanup and the props
+-- measure 0.53-0.62 where they used to measure 0.56-0.58. The ceiling moves
+-- to 0.65 because its calibration basis changed, not because an asset needed
+-- to pass -- and it is worth knowing that the measure SATURATES on small
+-- detailed objects for the same reason it is useless on decals: a 10x11 drum
+-- with three hoops, a turned edge and corrosion has few adjacent pairs left
+-- that agree. On a prop this is a backstop, and the silhouette rules
+-- (style.prop) are the check that carries real signal.
+style.max_edge_density = { ground = 0.30, transition = 0.34, structure = 0.55, prop = 0.65 }
 style.default_surface = "prop"
+
+-- The surface classes that EXIST. Kept separate from max_edge_density, which
+-- is the classes that have a busyness ceiling -- `decal` is a real class with
+-- no meaningful ceiling (above), and conflating "is this a known class" with
+-- "what is its ceiling" made adding one impossible.
+style.surfaces = { "ground", "transition", "structure", "prop", "decal" }
+style.is_surface = {}
+for _, name in ipairs(style.surfaces) do style.is_surface[name] = true end
+
+-- A transition tile carries the boundary between two terrains, which is one
+-- more feature than a field tile has. It gets a little more headroom than
+-- `ground` and is exempt from the seam-bias discipline (its whole job is to be
+-- different at the edges), but its FIELD average is still held to the ground
+-- limit: a transition band a hundred tiles long is still ground.
 
 -- Ground fields ---------------------------------------------------------------
 -- A ground tile is laid a hundred at a time. If the tiling shows, the world
@@ -87,19 +128,151 @@ style.grid = {
   max_field_density = 0.22,
 }
 
+-- Decals ---------------------------------------------------------------------
+-- A decal is a transparent overlay: one mark, dropped over ground. Its job is
+-- to take detail OFF the base tiles -- a field tile that carries its own stone
+-- prints that stone a hundred times, whereas a stone decal is placed where the
+-- level wants one. So a decal is mostly nothing:
+style.decal = {
+  max_coverage = 0.40,   -- opaque fraction of the tile. Above this it is not a
+                         -- decal, it is a tile.
+  -- Below this the decal is an accident rather than a mark. 5 pixels of a
+  -- 256-pixel cell: measured, the sparsest legitimate family (broken glass,
+  -- which can only be a glint at this size) bottoms out at 0.0195.
+  min_coverage = 0.018,
+  -- Separate marks per decal, counted by pixel_utils.mark_groups (8-connected,
+  -- 2px gap tolerance, so a diagonal crack is one mark and a tuft's spaced
+  -- stalks are one clump). A decal is ONE thing in ONE place -- a clump, a
+  -- stain, a few chunks together -- and a decal that breaks into eight marks
+  -- is a texture again.
+  --
+  -- 4 rather than 3: measured across the library, "a few stones", "rubble
+  -- fragments" and "leaf litter" land on four loose marks and read correctly
+  -- as one patch of litter. Set from the measurement, like every other number
+  -- in this file.
+  max_marks = 4,
+}
+
+-- Terrain and transitions ----------------------------------------------------
+-- Terrains meet along a boundary drawn by `terrain.lua`. The boundary is a
+-- thresholded bilinear blend of the four CORNER weights of the tile (16-tile
+-- corner Wang, which is Godot's TERRAIN_MODE_MATCH_CORNERS), so where two
+-- corners differ the boundary crosses that edge at its exact midpoint.
+--
+-- The invariant that makes a ragged natural boundary tileable is the same one
+-- that makes a decayed cast joint tileable (concrete.groove):
+--
+--     A BOUNDARY IS PINNED TO ITS IDEAL POSITION AT THE TILE EDGE, AND MAY
+--     WANDER ONLY IN THE MIDDLE.
+--
+-- Two tiles laid side by side each compute the ideal crossing point from their
+-- own corner weights and get the same answer, so the boundary meets. Inside
+-- the tile it is free, which is where the raggedness that stops a grass edge
+-- reading as a cut lawn has to live.
+style.terrain = {
+  pin_width = 3,       -- px at each tile edge where the boundary is pinned to
+                       -- the ideal position. Wander ramps in over this band.
+  noise_cell = 4,      -- value-noise lattice spacing, px. Lobes of ~4-8px:
+                       -- per-pixel noise would fringe the boundary with dust.
+  masks = 16,          -- corner Wang: 4 corners, so 16 configurations. Mask 0
+                       -- is the pure base terrain (the base generator itself),
+                       -- so transition sets generate masks 1..15.
+}
+
+-- Modular connectivity -------------------------------------------------------
+-- A wall or fence piece declares what its four edges present, as socket names
+-- (`sockets = { left = "wall_core", ... }`). Two pieces connect when the edge
+-- they meet on carries the same socket, and the `sockets` validator checks
+-- that claim mechanically: every piece presenting a socket must agree with
+-- every other piece on which ROWS of that edge are opaque and which palette
+-- RAMP each opaque row belongs to. That is the minimum meaning of "these
+-- connect visually" -- the material lines up and the silhouette does not step.
+--
+-- Nothing constrains the exact colour: a joint is allowed to decay, and one
+-- piece's edge may be rustier than its neighbour's.
+style.socket_tolerance = 0.0   -- rows of an edge profile allowed to disagree
+
 -- Dithering ------------------------------------------------------------------
 -- Ordered 2x2 Bayer only, anchored to absolute coordinates so neighbouring
 -- tiles stay in phase. Density 1..3 out of 4; 4 means "solid", i.e. not dither.
 style.dither_matrix = { { 0, 2 }, { 3, 1 } }
 style.dither_max_ramp_distance = 1 -- only ever mix two ADJACENT ramp steps
 
+-- Variation ------------------------------------------------------------------
+-- Two bounds, and a generator has to sit between them:
+--   * variants that share too many pixels are the same asset twice, and a
+--     level built from them repeats visibly;
+--   * variants that share too FEW are not the same object any more. A row of
+--     the same crate has to read as a row of the same crate, so the silhouette
+--     and the structure hold still and only the wear moves.
+-- Measured as the mean fraction of pixels two variants agree on, per class.
+style.variant_overlap = {
+  ground     = { min = 0.20, max = 0.97 },
+  transition = { min = 0.30, max = 0.98 },
+  decal      = { min = 0.05, max = 0.95 },
+  structure  = { min = 0.30, max = 0.97 },
+  prop       = { min = 0.55, max = 0.995 },
+}
+-- Byte-identical variants are always a bug: it means the seed did nothing.
+style.max_identical_variants = 0
+
+-- Props ----------------------------------------------------------------------
+-- A prop is a silhouette. These bound how much of its cell it may fill and how
+-- broken up that fill may be: a prop that fills its whole cell has no
+-- silhouette left to read, and one that is a scatter of disconnected fragments
+-- is rubble whether it meant to be or not.
+style.prop = {
+  min_occupancy = 0.10,     -- opaque fraction of the bounding cell
+  max_occupancy = 0.92,
+  max_components = 4,       -- separate opaque islands (a log plus its bark
+                            -- flakes is two; eight is a mess)
+  max_interior_holes = 2,   -- enclosed transparent regions. A bin has a mouth;
+                            -- a prop with six holes has been eaten by rust
+                            -- overlays rather than drawn.
+  min_hole_size = 2,        -- an enclosed 1px hole is a bug, never a window
+}
+
 -- Outlines -------------------------------------------------------------------
 style.outline_color = "ink_2"      -- near black; objects only, tiles are never outlined
 style.outline_diagonals = false    -- 4-neighbour outline, no corner nubs
 
+-- Categories -----------------------------------------------------------------
+-- What an asset IS, for the level editor and for the Godot manifest. The
+-- category fixes the sensible defaults for the two things an importer has to
+-- decide -- which layer it draws on and whether it collides -- so a generator
+-- only states them when it differs from its category.
+--
+--   layer      "ground"        the terrain layer itself
+--              "ground_detail" decals: over ground, under everything
+--              "object"        sorted with the player by its baseline
+--              "overhead"      drawn over the player (a canopy, a top of wall)
+--   collision  "none"          walk straight through
+--              "block"         the whole cell is solid
+--              "hull"          solid where the silhouette is (the importer
+--                              builds the polygon from the alpha)
+--              "low"           step over / shoot over: blocks movement, not
+--                              line of sight
+style.categories = {
+  ground      = { layer = "ground",         collision = "none" },
+  transition  = { layer = "ground",         collision = "none" },
+  -- The tileable wall and fence TEXTURES (as opposed to the modular pieces):
+  -- a level lays a run of them on an object layer and they block the cell.
+  structure   = { layer = "object",         collision = "block" },
+  decal       = { layer = "ground_detail",  collision = "none" },
+  vegetation  = { layer = "object",         collision = "none" },
+  rock        = { layer = "object",         collision = "hull" },
+  wall        = { layer = "object",         collision = "block" },
+  fence       = { layer = "object",         collision = "hull" },
+  road        = { layer = "object",         collision = "low" },
+  industrial  = { layer = "object",         collision = "hull" },
+  rubble      = { layer = "ground_detail",  collision = "low" },
+  prop        = { layer = "object",         collision = "hull" },
+}
+
 -- Draw order every generator must follow (documented in ART_STYLE.md) --------
 style.draw_order = {
-  "silhouette",      -- block in the shape, flat
+  "silhouette",      -- block in the shape, flat (a transition tile blocks in
+                     -- its two terrain regions here)
   "material",        -- material grammar fills it
   "structure",       -- seams, grooves, rivets, bands
   "lighting",        -- ramp-aware highlights and shadows

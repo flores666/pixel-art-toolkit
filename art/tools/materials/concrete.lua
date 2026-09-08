@@ -10,11 +10,21 @@ local palette = require("palette")
 local concrete = { name = "concrete", kind = "base", ramp = "concrete", base = "concrete_4" }
 
 --- Broad mottling plus aggregate. opts.wear (0..1) scales how beaten it looks.
+---
+--- opts.ground says this concrete is a FLOOR, laid in a field, and that
+--- changes what it is allowed to do. A wall is exempt from the field
+--- discipline and its own cast joints are louder than any weathering, so its
+--- staining patch is a full ramp step. A hundred floor tiles carrying a full
+--- ramp step of stain is a chequerboard, so on the ground the patch is drawn
+--- in the near-value neighbour instead (metal_5 sits 4 luminance under
+--- concrete_4 and is just as neutral) and the aggregate is left out entirely.
+--- Same material, same grammar, one honest difference of degree.
 function concrete.fill(surface, rng_stream, opts)
   opts = opts or {}
   local area = P.area(surface, opts.area)
   local mask = P.mask(surface, opts)
   local wear = opts.wear or 0.5
+  local ground = opts.ground or false
   local base = palette.resolve(opts.base or concrete.base)
 
   P.rect_fill(surface, area.x, area.y, area.w, area.h, base, { mask = mask })
@@ -31,11 +41,12 @@ function concrete.fill(surface, rng_stream, opts)
   P.cluster(surface,
     stain:range(area.x, area.x + area.w - 1), stain:range(area.y, area.y + area.h - 1),
     stain:range(math.floor(field * 0.12), math.floor(field * 0.20)),
-    palette.shift(base, -1), stain, { mask = mask, spread = 1.1 })
+    ground and palette.resolve("metal_5") or palette.shift(base, -1),
+    stain, { mask = mask, spread = 1.1 })
 
   -- Aggregate showing through where the surface has worn thin: ONE pair of
   -- pixels, and only on a beaten wall.
-  if wear > 0.55 then
+  if wear > 0.55 and not ground then
     local grit = rng_stream:branch("aggregate")
     P.speckle(surface, 1, palette.shift(base, 1), grit,
       { area = area, mask = opts.mask, max_size = 2 })

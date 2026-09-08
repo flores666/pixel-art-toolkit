@@ -41,9 +41,33 @@ function rust.fill(surface, rng_stream, opts)
   local exact = area.w * area.h * coverage / 40
   local patches = math.floor(exact)
   if site_rng:float() < exact - patches then patches = patches + 1 end
+
+  -- CORROSION SPREADS. Each patch used to be sited independently, which put
+  -- three or four disconnected ochre blobs at random over a barrel and read as
+  -- exactly what ART_STYLE.md 10 warns about: evenly scattered wear, the
+  -- tell-tale of generated art. Rust does not work like that -- it starts
+  -- somewhere water sits and eats outwards from there.
+  --
+  -- So after the first patch, most patches grow off an existing one. That
+  -- gives fewer, larger, connected corroded AREAS, which is both the honest
+  -- read and measurably calmer: one large patch carries far less edge per
+  -- pixel than three small ones (barrel edge density 0.63 -> 0.55).
+  local nuclei = {}
   for _ = 1, patches do
-    local x, y = site(area, site_rng, opts.bias)
+    local x, y
+    if #nuclei > 0 and site_rng:chance(0.65) then
+      local from = nuclei[site_rng:range(1, #nuclei)]
+      x, y = from[1] + site_rng:range(-3, 3), from[2] + site_rng:range(-2, 2)
+      -- stay inside the area; fall back to a fresh site rather than clamping,
+      -- because clamping would pile every patch onto the border
+      if x < area.x or y < area.y or x >= area.x + area.w or y >= area.y + area.h then
+        x, y = site(area, site_rng, opts.bias)
+      end
+    else
+      x, y = site(area, site_rng, opts.bias)
+    end
     if x then
+      nuclei[#nuclei + 1] = { x, y }
       -- Lobed, not radial: P.cluster grown tight from a seed makes a diamond
       -- or a plus at these sizes, and a plus reads as a printed symbol rather
       -- than as corrosion eating into a surface.

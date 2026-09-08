@@ -153,13 +153,28 @@ function previews.grid_report(name, opts)
     seam_contrast_y = (abs_y / math.max(1, n_y)) / mean_step,
     tile_luma_sd = math.sqrt(variance / #means),
   }
+  -- Report WHICH cue failed, not just that one did. Four measurements share
+  -- this verdict and the numbers are not interchangeable -- a field-density
+  -- breach is "the tile is too busy" and a seam-bias breach is "the tile has
+  -- an edge drawn on it", which are different bugs with different fixes. A
+  -- bare `ok = false` sent the reader off to re-measure by hand.
   local limits = style.grid
-  report.ok =
-    report.seam_bias_x <= limits.max_seam_bias and report.seam_bias_y <= limits.max_seam_bias
-    and report.seam_contrast_x >= limits.min_seam_contrast
-    and report.seam_contrast_y >= limits.min_seam_contrast
-    and report.tile_luma_sd <= limits.max_tile_luma_sd
-    and report.field_density <= limits.max_field_density
+  local failures = {}
+  local function check(name, value, limit, over)
+    local bad = over and value > limit or (not over and value < limit)
+    if bad then
+      failures[#failures + 1] = ("%s %.3f %s %.2f"):format(name, value, over and ">" or "<", limit)
+    end
+  end
+  check("seam_bias_x", report.seam_bias_x, limits.max_seam_bias, true)
+  check("seam_bias_y", report.seam_bias_y, limits.max_seam_bias, true)
+  check("seam_contrast_x", report.seam_contrast_x, limits.min_seam_contrast, false)
+  check("seam_contrast_y", report.seam_contrast_y, limits.min_seam_contrast, false)
+  check("tile_luma_sd", report.tile_luma_sd, limits.max_tile_luma_sd, true)
+  check("field_density", report.field_density, limits.max_field_density, true)
+  report.failures = failures
+  report.why = table.concat(failures, ", ")
+  report.ok = #failures == 0
   return report
 end
 

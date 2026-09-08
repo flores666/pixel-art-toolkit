@@ -1,13 +1,15 @@
--- generators/dry_grass.lua -- 16x16 seamless dry grass.
+-- generators/dry_grass.lua -- 16x16 seamless dry grass. The default ground
+-- away from the roads.
 --
--- Last year's straw with olive tufts pushing through and soil showing where
--- nothing took. Same field discipline as dirt_ground: no edge-keyed marks, a
--- constant base, uniformly placed detail.
+-- Last year's straw with the soil showing where nothing took. Same field
+-- discipline as dirt_ground: no edge-keyed marks, a constant base, uniformly
+-- placed detail -- and, since the decal system exists, no standing vegetation
+-- baked in. A tuft on a field tile is a tuft printed a hundred times, and a
+-- hundred tufts on a 16px pitch is the confetti this generator used to
+-- produce. Standing growth is `decal_grass_tuft` and its family now.
 
 local P = require("pixel_utils")
-local materials = require("materials")
-
-local grass = materials.grass
+local terrain = require("terrain")
 
 local gen = {
   name = "dry_grass",
@@ -15,34 +17,18 @@ local gen = {
   size = { w = 16, h = 16 },
   tileable = true,
   surface = "ground",
+  category = "ground",
+  variants = 12,
+  terrain_type = "dry_grass",
 }
 
 function gen.build(rng_stream, opts)
   opts = opts or {}
   local s = P.new(gen.size.w, gen.size.h, { wrap = true })
-
-  -- material: how much came back this year, and how much is bare
-  local green = opts.green or rng_stream:weighted {
-    { value = 0.25, weight = 3 },   -- mostly dead
-    { value = 0.50, weight = 3 },
-    { value = 0.75, weight = 2 },   -- overgrown corner
-  }
-  grass.fill(s, rng_stream, { green = green, bare = opts.bare or 0.3 })
-
-  -- structure: the odd tall dead stem left standing above the mat. One, on a
-  -- minority of tiles: the clump inside grass.fill is already the tile's
-  -- vegetation, and a second mark on every cell is how the first draft turned
-  -- into confetti. Seeded anywhere including the edges -- the surface wraps,
-  -- and detail that avoids the top rows leaves a measurable calm band at every
-  -- tile boundary, which is a grid by another route.
-  if rng_stream:chance(0.22) then
-    local stalks = rng_stream:branch("stalks")
-    grass.blade(s, stalks:range(0, 15), stalks:range(0, 15), stalks:range(4, 6), stalks, {})
-  end
-
-  -- cleanup
-  P.despeckle(s)
-  return s
+  return terrain.field(s, "dry_grass", rng_stream, {
+    green = opts.green,
+    mark = "stem", mark_chance = 0.22,
+  })
 end
 
 return gen

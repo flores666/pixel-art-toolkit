@@ -27,12 +27,15 @@ local palette = require("palette")
 
 local earth = { name = "earth", kind = "base", ramp = "earth", base = "earth_3" }
 
---- opts.wear (0..1) how churned the ground is; opts.base ramp step.
+--- opts.wear (0..1) how churned the ground is; opts.base ramp step;
+--- opts.dust the near-value neighbour the tone patch is drawn in;
+--- opts.drift how much of the area that patch covers (0..1).
 function earth.fill(surface, rng_stream, opts)
   opts = opts or {}
   local area = P.area(surface, opts.area)
   local mask = P.mask(surface, opts)
   local base = palette.resolve(opts.base or earth.base)
+  local drift = opts.drift or 0.20
   local field = area.w * area.h
 
   P.rect_fill(surface, area.x, area.y, area.w, area.h, base, { mask = mask })
@@ -46,7 +49,8 @@ function earth.fill(surface, rng_stream, opts)
   local dust = rng_stream:branch("earth_dust")
   P.cluster(surface,
     dust:range(area.x, area.x + area.w - 1), dust:range(area.y, area.y + area.h - 1),
-    dust:range(math.floor(field * 0.16), math.floor(field * 0.24)),
+    dust:range(math.floor(field * math.max(0, drift - 0.04)),
+               math.floor(field * (drift + 0.04))),
     palette.resolve(opts.dust or "straw_2"), dust, { mask = mask, spread = 1.0 })
 end
 

@@ -25,7 +25,15 @@ local palette = require("palette")
 local grass = { name = "grass", kind = "base", ramp = "straw", base = "straw_2" }
 
 --- A dry field. opts.green (0..1) how much has come back this year,
---- opts.bare (0..1) how much soil shows through.
+--- opts.bare (0..1) how much soil shows through, opts.thin (0..1) how much of
+--- the mat has worn back to soil, opts.tufts false to leave standing growth
+--- out altogether.
+---
+--- `tufts = false` is what a TERRAIN fill uses. A tuft on a field tile is
+--- printed a hundred times over a field, and a hundred tufts on a 16px pitch
+--- is confetti however well one of them is drawn -- so standing vegetation is
+--- a DECAL now (decals.lua), placed where the level wants it, and the terrain
+--- fill is the mat it grows out of and nothing else.
 function grass.fill(surface, rng_stream, opts)
   opts = opts or {}
   local area = P.area(surface, opts.area)
@@ -33,6 +41,9 @@ function grass.fill(surface, rng_stream, opts)
   local base = palette.resolve(opts.base or grass.base)
   local green = opts.green or 0.5
   local bare = opts.bare or 0.3
+  local thin_amount = opts.thin or 0.17
+  local want_tufts = opts.tufts
+  if want_tufts == nil then want_tufts = true end
   local field = area.w * area.h
 
   P.rect_fill(surface, area.x, area.y, area.w, area.h, base, { mask = mask })
@@ -44,7 +55,8 @@ function grass.fill(surface, rng_stream, opts)
   local thin = rng_stream:branch("grass_thin")
   P.cluster(surface,
     thin:range(area.x, area.x + area.w - 1), thin:range(area.y, area.y + area.h - 1),
-    thin:range(math.floor(field * 0.14), math.floor(field * 0.20)),
+    thin:range(math.floor(field * math.max(0, thin_amount - 0.03)),
+               math.floor(field * (thin_amount + 0.03))),
     "earth_3", thin, { mask = mask, spread = 1.0 })
 
   -- Matted, shadowed dead growth: one small darker drift. Straw, not olive.
@@ -67,7 +79,7 @@ function grass.fill(surface, rng_stream, opts)
   -- separate marks across every cell is what produced confetti, and no tuft
   -- however well drawn survives being repeated a hundred times on a 16px pitch.
   local stroke = rng_stream:branch("grass_stroke")
-  if stroke:chance(0.80) then
+  if want_tufts and stroke:chance(0.80) then
     -- Olive is the minority report: mostly this is bleached dead straw.
     local olive = stroke:float() < green * 0.5
     local x = stroke:range(area.x, area.x + area.w - 1)
