@@ -139,6 +139,13 @@ validators.rules = {
       -- decals at random. Those are checked by decal_coverage/decal_marks.
       local cap = style.max_edge_density[kind]
       if not cap then return end
+      -- edge_density only means anything on an asset with a solid interior.
+      -- On one made of one-pixel strokes -- a weed, a fallen branch, a decal
+      -- -- almost every adjacent pair straddles a lit face or an outline and
+      -- the measure saturates near 1.0 however well the asset is drawn. This
+      -- gate is why `decal` needs no ceiling of its own: the exemption is a
+      -- consequence of the same rule rather than a special case.
+      if P.interior_ratio(surface) < style.min_interior_for_density then return end
       local density = P.edge_density(surface)
       if density > cap then
         return issue("texture_noise",
@@ -270,14 +277,15 @@ validators.rules = {
           ("%d enclosed hole(s) smaller than %d px -- a pinhole is a bug, not a window")
             :format(small, limits.min_hole_size), samples, small)
       end
-      if #holes > limits.max_interior_holes then
+      local hole_cap = spec.max_interior_holes or limits.max_interior_holes
+      if #holes > hole_cap then
         local where = {}
         for i = 1, math.min(MAX_SAMPLES, #holes) do
           where[i] = { x = holes[i].pixels[1][1], y = holes[i].pixels[1][2] }
         end
         return issue("prop_silhouette",
           ("%d enclosed transparent holes, cap is %d -- the wear overlays have eaten the shape")
-            :format(#holes, limits.max_interior_holes), where, #holes)
+            :format(#holes, hole_cap), where, #holes)
       end
     end,
   },

@@ -785,6 +785,77 @@ function P.holes(surface)
   return out
 end
 
+--- Fraction of opaque pixels that are INTERIOR: all four neighbours opaque.
+--
+-- This is how much solid body an asset has, and it is the precondition for
+-- `edge_density` meaning anything. That measure is differing-adjacent-pairs
+-- over adjacent-pairs, so on an asset made of one-pixel strokes -- a weed, a
+-- fallen branch, any decal -- nearly every adjacent pair straddles a lit face
+-- or an outline and the measure saturates near 1.0 no matter how carefully the
+-- thing is drawn. On a body with an interior it measures what it claims to.
+function P.interior_ratio(surface)
+  local interior, opaque = 0, 0
+  for x, y, c in surface:pixels() do
+    if c ~= palette.TRANSPARENT then
+      opaque = opaque + 1
+      if surface:is_opaque(x + 1, y) and surface:is_opaque(x - 1, y)
+        and surface:is_opaque(x, y + 1) and surface:is_opaque(x, y - 1) then
+        interior = interior + 1
+      end
+    end
+  end
+  if opaque == 0 then return 0 end
+  return interior / opaque
+end
+
+--- Fill enclosed one-pixel transparent holes with the colour around them.
+--
+-- A pinhole is always a bug: it is what is left when strokes radiating from a
+-- crown (a bush, a tree, a tangle of branches) happen to enclose a single
+-- cell, and after outlining it reads as a dropped pixel in the middle of the
+-- shape. Filling it is the same operation as despeckle -- take the local
+-- majority -- but for transparency rather than for colour, and it belongs in
+-- cleanup for the same reason: the alternative is every kit remembering to
+-- avoid a geometry it cannot see coming.
+--
+-- Only holes strictly smaller than `min_size` are filled. Anything larger is
+-- a drawn hole (a bin's mouth, a rusted-through panel) and must survive.
+-- @return number of pixels filled
+function P.fill_pinholes(surface, opts)
+  opts = opts or {}
+  local min_size = opts.min_size or style.prop.min_hole_size
+  local excluded = {}
+  for _, c in ipairs(opts.exclude or { style.outline_color }) do
+    excluded[palette.resolve(c)] = true
+  end
+  local filled = 0
+  for _, hole in ipairs(P.holes(surface)) do
+    if hole.size < min_size then
+      for _, p in ipairs(hole.pixels) do
+        local votes, best, best_n = {}, nil, 0
+        for dy = -1, 1 do
+          for dx = -1, 1 do
+            if dx ~= 0 or dy ~= 0 then
+              local c = surface:get(p[1] + dx, p[2] + dy)
+              -- The outline may not win the vote, for the same reason it may
+              -- not win in despeckle: beside a silhouette it is usually the
+              -- local majority, and letting it fill the hole would print an
+              -- ink dot inside the shape.
+              if c ~= palette.TRANSPARENT and not excluded[c] then
+                local n = (votes[c] or 0) + 1
+                votes[c] = n
+                if n > best_n or (n == best_n and best and c < best) then best, best_n = c, n end
+              end
+            end
+          end
+        end
+        if best then surface:set(p[1], p[2], best); filled = filled + 1 end
+      end
+    end
+  end
+  return filled
+end
+
 --- Fraction of neighbouring opaque pixel pairs whose colour differs: a plain
 -- measure of how busy a surface is. The game's own hand-authored platform field
 -- tiles sit at 0.10-0.17 and its wall faces near 0.25; generated texture that
@@ -794,15 +865,30 @@ end
 -- luminance or a hundred -- so a low number does not prove a surface is calm
 -- and a high one does not prove it is noisy. Use it as a ceiling and judge the
 -- art by looking at the field.
-function P.edge_density(surface)
+--
+-- THE OUTLINE IS EXCLUDED BY DEFAULT, and that correction matters. An outline
+-- is mandatory on a prop (ART_STYLE.md 8) and differs from every body colour,
+-- so every body pixel on the perimeter contributes a differing pair. The
+-- measure then scores an asset on its perimeter-to-area ratio rather than on
+-- its texture: a weed drawn as four clean strokes measured 0.68 and a solid
+-- drum covered in corrosion measured 0.59, which is exactly backwards. What
+-- the rule is actually asking is "how busy is the material inside the shape",
+-- so pairs involving the outline are not counted.
+-- @param opts { ignore = { colours } } defaults to { style.outline_color }
+function P.edge_density(surface, opts)
+  opts = opts or {}
+  local ignored = {}
+  for _, c in ipairs(opts.ignore or { style.outline_color }) do
+    ignored[palette.resolve(c)] = true
+  end
   local differing, pairs_seen = 0, 0
   for x, y, c in surface:pixels() do
-    if c ~= palette.TRANSPARENT then
+    if c ~= palette.TRANSPARENT and not ignored[c] then
       for _, d in ipairs { { 1, 0 }, { 0, 1 } } do
         local nx, ny = x + d[1], y + d[2]
         if nx < surface.width and ny < surface.height then
           local n = surface:get(nx, ny)
-          if n ~= palette.TRANSPARENT then
+          if n ~= palette.TRANSPARENT and not ignored[n] then
             pairs_seen = pairs_seen + 1
             if n ~= c then differing = differing + 1 end
           end

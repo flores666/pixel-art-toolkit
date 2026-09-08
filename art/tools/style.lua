@@ -71,18 +71,27 @@ style.max_isolated_ratio = 0.04    -- never more than 4% of opaque pixels
 -- things that actually go wrong: how much of the cell it covers and how many
 -- separate marks it breaks into.
 --
--- The `prop` ceiling was 0.60, measured against output from a `despeckle` that
--- was silently destroying deliberate detail: the old stray test condemned any
--- pixel with no same-coloured neighbour, which is precisely the documented
--- grammar for a stone (a lit cap plus its own shadow, ART_STYLE.md 5) and for
--- a rivet catch-light. With that fixed, detail survives cleanup and the props
--- measure 0.53-0.62 where they used to measure 0.56-0.58. The ceiling moves
--- to 0.65 because its calibration basis changed, not because an asset needed
--- to pass -- and it is worth knowing that the measure SATURATES on small
--- detailed objects for the same reason it is useless on decals: a 10x11 drum
--- with three hoops, a turned edge and corrosion has few adjacent pairs left
--- that agree. On a prop this is a backstop, and the silhouette rules
--- (style.prop) are the check that carries real signal.
+-- These are measured against the current library, with headroom. As of the
+-- outdoor kit the worst seed of any generator in each class sits at:
+-- ground 0.19, transition 0.33, structure 0.44, prop 0.59.
+--
+-- The `prop` ceiling was 0.60 and its basis changed twice, both times because
+-- a bug was fixed rather than because an asset needed to pass:
+--
+--   * `despeckle` was silently destroying deliberate detail -- the old stray
+--     test condemned any pixel with no same-coloured neighbour, which is
+--     exactly the documented grammar for a stone (a lit cap plus its own
+--     shadow, ART_STYLE.md 5) and for a rivet catch-light. Detail now
+--     survives cleanup, so everything measures a little busier;
+--   * `edge_density` counted body-against-OUTLINE pairs. An outline is
+--     mandatory and differs from every body colour, so the measure was
+--     scoring perimeter-to-area rather than texture: a weed drawn as four
+--     clean strokes scored 0.68 and a drum covered in corrosion 0.59. With
+--     the outline excluded the weed scores 0.25, which is the right order.
+--
+-- Even corrected, this measure is a backstop on a prop: it is blind to
+-- contrast, and on a small object the silhouette rules (style.prop) are what
+-- carry real signal.
 style.max_edge_density = { ground = 0.30, transition = 0.34, structure = 0.55, prop = 0.65 }
 style.default_surface = "prop"
 
@@ -90,6 +99,12 @@ style.default_surface = "prop"
 -- is the classes that have a busyness ceiling -- `decal` is a real class with
 -- no meaningful ceiling (above), and conflating "is this a known class" with
 -- "what is its ceiling" made adding one impossible.
+-- Below this fraction of opaque pixels being INTERIOR (all four neighbours
+-- opaque), edge_density carries no signal and texture_noise does not apply --
+-- see pixel_utils.interior_ratio. Measured: solid-bodied props sit at
+-- 0.35-0.60, stroke assets (a weed, a branch, every decal) at 0.00-0.12.
+style.min_interior_for_density = 0.20
+
 style.surfaces = { "ground", "transition", "structure", "prop", "decal" }
 style.is_surface = {}
 for _, name in ipairs(style.surfaces) do style.is_surface[name] = true end

@@ -38,6 +38,12 @@
 --                       others on that edge's opaque rows and palette ramps.
 --   over                what surfaces a decal may be placed on (terrain names,
 --                       or "any"); the scene composer honours it.
+--   max_interior_holes  override style.prop.max_interior_holes. A BRANCHING
+--                       silhouette encloses regions as a matter of geometry --
+--                       a fork closes a ring -- and those holes are the asset,
+--                       not wear damage. Declaring the budget keeps the rule
+--                       enforcing something (a regression to twelve still
+--                       fails) instead of being switched off.
 --
 -- build() must be pure: the same (name, seed) must produce the same pixels
 -- forever. Take every random decision from `rng_stream` (or a named branch of
@@ -61,7 +67,7 @@ generators.modules = {
   -- decals: transparent overlays, so detail is placed and not printed
   "decals",              -- set: the decal families
   -- natural
-  -- TODO "vegetation",          -- set: bushes, scrub, weeds, trees, stumps, logs
+  "vegetation",          -- set: bushes, scrub, weeds, trees, stumps, logs          -- set: bushes, scrub, weeds, trees, stumps, logs
   -- TODO "rocks",               -- set: rocks by scale, and clusters
   -- structure
   "concrete_ruin_wall",
@@ -140,6 +146,7 @@ function generators.spec(name)
     name = name, width = gen.size.w, height = gen.size.h,
     wrap = gen.tileable, surface = gen.surface, category = gen.category,
     terrain = gen.terrain, sockets = gen.sockets,
+    max_interior_holes = gen.max_interior_holes,
   }
 end
 
