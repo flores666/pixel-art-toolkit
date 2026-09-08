@@ -76,11 +76,11 @@ generators.modules = {
   "fences",              -- set: the modular fence/barrier kit              -- set: the modular fence/barrier kit
   -- infrastructure
   "road_kit",            -- set: barriers, signs, poles, lamps, cabinets, pipes            -- set: barriers, signs, poles, lamps, cabinets, pipes
-  -- TODO "rubble",              -- set: debris and destruction
+  "rubble",              -- set: debris and destruction              -- set: debris and destruction
   -- props
   "supply_crate",
   "rusted_barrel",
-  -- TODO "props",               -- set: the survival-world prop library
+  "props",               -- set: the survival-world prop library               -- set: the survival-world prop library
 }
 
 generators.names = {}

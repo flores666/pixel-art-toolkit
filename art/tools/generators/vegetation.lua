@@ -165,7 +165,14 @@ veg { name = "tall_grass_clump", outline = false, surface = "decal", title = "Ta
 -- limbs at a wide angle from along the trunk rather than off its tip. Cracks
 -- and branches are the same shape for the same reason, so they share the
 -- primitive.
-local function limb(s, x, y, len, heading, thickness, color, rng_stream, depth)
+-- `mask` keeps a limb inside the asset's safe area. A prop is placed on a
+-- grid, so a branch that reaches the very edge of the cell is drawn hard
+-- against whatever the level puts in the next cell -- and a branch sliced off
+-- at a corner reads as a cut, not as a canopy. ART_STYLE.md 1 states the rule
+-- (props leave the tile corners transparent); this is how a spreading
+-- silhouette obeys it without having its limbs truncated after the fact,
+-- which would leave stubs for the outline to wrap.
+local function limb(s, x, y, len, heading, thickness, color, rng_stream, depth, mask)
   local dirs = P.compass
   local fx, fy = x, y
   local h = heading
@@ -179,10 +186,10 @@ local function limb(s, x, y, len, heading, thickness, color, rng_stream, depth)
   for i = 1, len do
     local d = dirs[h + 1]
     for t = 0, thickness - 1 do
-      P.pixel(s, math.floor(fx + 0.5) + t, math.floor(fy + 0.5), color)
+      P.pixel(s, math.floor(fx + 0.5) + t, math.floor(fy + 0.5), color, mask)
     end
     if lit_left > 0 then
-      P.pixel(s, math.floor(fx + 0.5) - 1, math.floor(fy + 0.5), palette.shift(color, 1))
+      P.pixel(s, math.floor(fx + 0.5) - 1, math.floor(fy + 0.5), palette.shift(color, 1), mask)
       lit_left = lit_left - 1
     elseif rng_stream:chance(0.30) then
       lit_left = rng_stream:range(2, 4)
@@ -195,7 +202,7 @@ local function limb(s, x, y, len, heading, thickness, color, rng_stream, depth)
         limb(s, math.floor(fx + 0.5), math.floor(fy + 0.5),
           math.max(2, len - rng_stream:range(2, 4)),
           (h + (rng_stream:chance(0.5) and 2 or 6)) % 8,
-          math.max(1, thickness - 1), color, rng_stream, depth - 1)
+          math.max(1, thickness - 1), color, rng_stream, depth - 1, mask)
       end
     end
   end
@@ -203,6 +210,12 @@ local function limb(s, x, y, len, heading, thickness, color, rng_stream, depth)
 end
 
 local function tree(s, r, opts)
+  -- One clear cell of margin all round, so the outline has somewhere to sit
+  -- and a limb never lands on the cell border.
+  local m = opts.margin or 1
+  local inside = function(x, y)
+    return x >= m and y >= m and x < s.width - m and y < s.height - m
+  end
   local trunk_x = s.width // 2 + r:range(-1, 1)
   local base = s.height - 2
   local top = opts.crown_y or 8
@@ -247,10 +260,10 @@ local function tree(s, r, opts)
     -- at the diagonal and kinks upward is the shape of a branch.
     local heading = r:chance(0.5) and 5 or 7
     limb(s, trunk_top + r:range(0, 1), from_y, reach, heading,
-      math.max(1, thickness - 1), bark, r, 2)
+      math.max(1, thickness - 1), bark, r, 2, inside)
   end
   -- and the leader, continuing the trunk out of the crown
-  limb(s, trunk_top, top, r:range(4, 7), 6, math.max(1, thickness - 1), bark, r, 1)
+  limb(s, trunk_top, top, r:range(4, 7), 6, math.max(1, thickness - 1), bark, r, 1, inside)
 
   -- foliage, if this tree still has any. Clumped ON the limbs, never as a
   -- ball around them: a canopy is what the branches are carrying.
@@ -260,7 +273,8 @@ local function tree(s, r, opts)
       local x = trunk_top + leaf:range(-7, 7)
       local y = top + leaf:range(-5, 4)
       local color = palette.resolve(leaf:chance(0.55) and "grass_2" or "straw_1")
-      local blob = P.cluster(s, x, y, leaf:range(4, 8), color, leaf, { spread = 0.5 })
+      local blob = P.cluster(s, x, y, leaf:range(4, 8), color, leaf,
+        { spread = 0.5, mask = inside })
       -- lit on the upper-left of each clump; that is what stops a canopy
       -- reading as a flat silhouette
       if #blob > 0 then

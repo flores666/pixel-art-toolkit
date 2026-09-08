@@ -785,27 +785,42 @@ function P.holes(surface)
   return out
 end
 
---- Fraction of opaque pixels that are INTERIOR: all four neighbours opaque.
+--- Fraction of BODY pixels that are interior: all four neighbours also body.
 --
 -- This is how much solid body an asset has, and it is the precondition for
 -- `edge_density` meaning anything. That measure is differing-adjacent-pairs
--- over adjacent-pairs, so on an asset made of one-pixel strokes -- a weed, a
--- fallen branch, any decal -- nearly every adjacent pair straddles a lit face
--- or an outline and the measure saturates near 1.0 no matter how carefully the
--- thing is drawn. On a body with an interior it measures what it claims to.
-function P.interior_ratio(surface)
-  local interior, opaque = 0, 0
+-- over adjacent-pairs, so on an asset that is mostly boundary -- a weed, a
+-- cable, a small low pile -- nearly every adjacent pair straddles a lit face
+-- and the measure saturates no matter how carefully the thing is drawn.
+--
+-- THE OUTLINE IS EXCLUDED, exactly as it is in `edge_density`, and the two
+-- have to agree or the gate does not gate what it is guarding. Counting the
+-- outline as body makes every stroke pixel "interior" -- a one-pixel stalk
+-- with outline either side has all four neighbours opaque -- so a weed
+-- reported an interior ratio of 0.58 and sailed past a gate meant to catch
+-- exactly that case.
+-- @param opts { ignore = { colours } } defaults to { style.outline_color }
+function P.interior_ratio(surface, opts)
+  opts = opts or {}
+  local ignored = {}
+  for _, c in ipairs(opts.ignore or { style.outline_color }) do
+    ignored[palette.resolve(c)] = true
+  end
+  local function body(x, y)
+    local c = surface:get(x, y)
+    return c ~= palette.TRANSPARENT and not ignored[c]
+  end
+  local interior, total = 0, 0
   for x, y, c in surface:pixels() do
-    if c ~= palette.TRANSPARENT then
-      opaque = opaque + 1
-      if surface:is_opaque(x + 1, y) and surface:is_opaque(x - 1, y)
-        and surface:is_opaque(x, y + 1) and surface:is_opaque(x, y - 1) then
+    if c ~= palette.TRANSPARENT and not ignored[c] then
+      total = total + 1
+      if body(x + 1, y) and body(x - 1, y) and body(x, y + 1) and body(x, y - 1) then
         interior = interior + 1
       end
     end
   end
-  if opaque == 0 then return 0 end
-  return interior / opaque
+  if total == 0 then return 0 end
+  return interior / total
 end
 
 --- Remove outline pixels that no longer have a body pixel beside them.
