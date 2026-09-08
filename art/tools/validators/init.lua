@@ -382,13 +382,23 @@ validators.group_rules = {
     title = "A tileable generator does not leave a calm ring around every cell",
     check = function(ctx)
       if not ctx.gen.tileable then return end
-      -- Aggregated over every variant, which is the scope at which this is a
-      -- real defect: detail that systematically avoids the edges leaves a calm
-      -- frame around every cell, and a field of those reads as a lattice
-      -- however clean each individual tile is. previews.grid_report catches
-      -- the same thing over a laid field (seam_contrast); this attributes it
-      -- to a generator, and applies to every tileable class rather than only
-      -- to ground.
+      -- FIELD tiles only. Aggregated over every variant, which is the scope at
+      -- which this is a real defect: detail that systematically avoids the
+      -- edges leaves a calm frame around every cell, and a field of those
+      -- reads as a lattice however clean each individual tile is.
+      -- previews.grid_report catches the same thing over a laid field
+      -- (seam_contrast); this attributes it to a generator.
+      --
+      -- It does NOT apply to transition tiles, and that is a limit of the
+      -- rule rather than an exemption for convenience. A transition tile's
+      -- marks are supposed to be concentrated where the OVER terrain is, and
+      -- for most of the fourteen corner masks that region is nowhere near
+      -- uniform across the cell -- a single covered corner puts every mark in
+      -- one quadrant, which the statistic reads as "marks avoid the border".
+      -- The guarantee a transition needs instead is that its boundary is
+      -- pinned at the cell edge, and that is verified exactly for all masks
+      -- at every amplitude by the terrain tests.
+      if ctx.gen.surface ~= "ground" then return end
       local ring, ring_marks, inner, inner_marks = 0, 0, 0, 0
       for _, seed in ipairs(ctx.sample) do
         local surface = ctx.surfaces[seed]

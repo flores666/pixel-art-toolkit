@@ -160,10 +160,21 @@ item { name = "sign_post", title = "Sign post, empty 16x32", w = 16, h = 32,
   draw = function(s, r)
     -- The post with its sign long gone -- only the fixing brackets left. This
     -- is the most post-apocalyptic asset in the kit and costs almost nothing.
-    sign_post(s, 7, 4, 30, r)
-    for _, y in ipairs { 6, 9 } do
+    -- The bracket positions and count vary, which is the only structural
+    -- freedom this asset has. Without it two seeds produced byte-identical
+    -- output -- the variant_similarity rule caught it as "the seed did
+    -- nothing", and it was right: the post is drawn deterministically and its
+    -- wear channels can both roll to nothing.
+    local top = r:range(4, 7)
+    sign_post(s, 7, top, 30, r)
+    local brackets = r:range(2, 3)
+    for i = 0, brackets - 1 do
+      local y = top + 2 + i * r:range(3, 4)
+      if y > 26 then break end
       P.rect_fill(s, 5, y, 6, 1, "metal_5")
       P.rect_fill(s, 5, y + 1, 6, 1, "metal_2")
+      -- a sheared bolt left in one bracket
+      if r:chance(0.4) then P.pixel(s, r:chance(0.5) and 5 or 10, y, "rust_2") end
     end
   end }
 
@@ -388,7 +399,12 @@ item { name = "junction_box", title = "Junction box 16x16", category = "industri
   draw = function(s, r)
     -- A small box on a short stalk, with conduit leaving the bottom. Reads at
     -- 1x because the silhouette is a plain rectangle on a stem.
-    local x0, y0, w, h = 4, 4, 8, 7
+    -- Size and stalk height vary: with a fixed box and two wear channels that
+    -- can both roll to nothing, two seeds came out byte-identical.
+    local w = r:range(7, 9)
+    local h = r:range(6, 8)
+    local x0 = 8 - w // 2
+    local y0 = r:range(3, 5)
     object.box(s, x0, y0, w, h, "metal", 4)
     P.rect_fill(s, x0, y0, w, 1, "metal_6")
     P.rect(s, x0 + 1, y0 + 1, w - 2, h - 2, "metal_3")
@@ -399,7 +415,7 @@ item { name = "junction_box", title = "Junction box 16x16", category = "industri
     object.upright(s, 7, y0 + h, 14, "metal", 3, { width = 2 })
     if r:chance(0.6) then
       local cx = r:chance(0.5) and (x0 - 1) or (x0 + w)
-      for k = 0, 2 do P.pixel(s, cx, y0 + 3 + k, "metal_3") end
+      for k = 0, r:range(2, 3) do P.pixel(s, cx, y0 + 3 + k, "metal_3") end
     end
   end }
 
@@ -488,13 +504,20 @@ item { name = "drain", title = "Gully / drain 16x16", category = "road",
   draw = function(s, r)
     -- A kerbside gully grating: a rectangular frame with bars across it and
     -- darkness behind them. Flush like the manhole, so no outline.
-    local x0, y0, w, h = 3, 5, 10, 7
+    -- Frame size and bar pitch vary. Fixed, this asset's only variation was a
+    -- silt cluster and a rust channel, and three pairs of seeds came out
+    -- byte-identical.
+    local w = r:range(9, 11)
+    local h = r:range(6, 8)
+    local x0 = 8 - w // 2
+    local y0 = r:range(4, 6)
     P.rect_fill(s, x0, y0, w, h, "ink_4")            -- the void behind the bars
     P.rect(s, x0, y0, w, h, "metal_4")
     P.hline(s, x0, y0, w, "metal_5")                  -- frame, lit on top
     P.hline(s, x0, y0 + h - 1, w, "metal_2")
-    -- the bars: runs, and an odd number so the grating is never symmetrical
-    for x = x0 + 2, x0 + w - 3, 2 do
+    -- the bars: runs, and spaced so the grating is never symmetrical
+    local pitch = r:range(2, 3)
+    for x = x0 + 2, x0 + w - 3, pitch do
       P.vline(s, x, y0 + 1, h - 2, "metal_4")
       P.pixel(s, x, y0 + 1, "metal_5")
     end

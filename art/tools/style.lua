@@ -92,7 +92,17 @@ style.max_isolated_ratio = 0.04    -- never more than 4% of opaque pixels
 -- Even corrected, this measure is a backstop on a prop: it is blind to
 -- contrast, and on a small object the silhouette rules (style.prop) are what
 -- carry real signal.
-style.max_edge_density = { ground = 0.30, transition = 0.34, structure = 0.55, prop = 0.65 }
+-- `transition` is 0.38 rather than the ground class's 0.30 because a
+-- transition tile holds TWO ground surfaces plus the boundary between them,
+-- so its busyness is bounded by the busier of the pair and not by either
+-- alone. Measured: the busiest single ground tiles run 0.21-0.24 (dry grass,
+-- gravel), and the busiest transition -- crazed tarmac meeting textured dry
+-- grass -- reaches 0.36. The number is set from that, with headroom.
+--
+-- Its FIELD average is still held to the ground limit (style.grid), which is
+-- the check that actually matters: a transition band a hundred tiles long is
+-- still ground.
+style.max_edge_density = { ground = 0.30, transition = 0.38, structure = 0.55, prop = 0.65 }
 style.default_surface = "prop"
 
 -- The surface classes that EXIST. Kept separate from max_edge_density, which
@@ -223,7 +233,15 @@ style.dither_max_ramp_distance = 1 -- only ever mix two ADJACENT ramp steps
 -- Measured as the mean fraction of pixels two variants agree on, per class.
 style.variant_overlap = {
   ground     = { min = 0.20, max = 0.97 },
-  transition = { min = 0.30, max = 0.98 },
+  -- A transition tile is chosen by CONNECTIVITY, not by looks: the level asks
+  -- for "the piece whose top-left corner is grass" and there is exactly one
+  -- answer. So the lower bound -- which exists to stop a prop's variants
+  -- drifting until they stop being the same object -- has little to guard
+  -- here, and a diagonal mask between two high-contrast terrains legitimately
+  -- shares only 29% of its pixels between variants. It is held to the ground
+  -- floor instead; the UPPER bound, which catches variants too similar to be
+  -- worth shipping, is what matters for this class.
+  transition = { min = 0.20, max = 0.98 },
   decal      = { min = 0.05, max = 0.95 },
   structure  = { min = 0.30, max = 0.97 },
   prop       = { min = 0.55, max = 0.995 },

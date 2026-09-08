@@ -68,7 +68,7 @@ generators.modules = {
   "decals",              -- set: the decal families
   -- natural
   "vegetation",          -- set: bushes, scrub, weeds, trees, stumps, logs          -- set: bushes, scrub, weeds, trees, stumps, logs
-  -- TODO "rocks",               -- set: rocks by scale, and clusters
+  "rocks",               -- set: rocks by scale, and clusters               -- set: rocks by scale, and clusters
   -- structure
   "concrete_ruin_wall",
   "rusted_fence",

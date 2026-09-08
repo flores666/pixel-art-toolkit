@@ -204,6 +204,12 @@ end
 --               does not check this, the eye does: it is the colour the player
 --               spends the whole game looking at.
 --   fill(surface, rng_stream, opts)   opts.area, opts.mask
+--   generator   the name of the generator that draws a FIELD tile of it. The
+--               scene composer needs it to resolve a cell whose four corners
+--               agree, and it lives here so the mapping is stated once rather
+--               than reconstructed from a naming convention -- three of the
+--               nine terrains have field generators whose names differ from
+--               their own, because those three shipped first.
 --   wear        0..1 default character, passed through to the material
 terrain.types = {}
 terrain.names = {}
@@ -217,13 +223,13 @@ end
 
 --- Bare dry soil. The default ground of the surface world.
 register {
-  name = "dirt", title = "Dirt", base = "earth_3",
+  name = "dirt", family = "soft", kin = "soil", generator = "dirt_ground", title = "Dirt", base = "earth_3",
   fill = function(s, r, opts) materials.earth.fill(s, r, opts) end,
 }
 
 --- Last year's straw, standing. The default ground away from the roads.
 register {
-  name = "dry_grass", title = "Dry grass", base = "straw_2",
+  name = "dry_grass", family = "soft", kin = "grass", generator = "dry_grass", title = "Dry grass", base = "straw_3",
   fill = function(s, r, opts)
     materials.grass.fill(s, r, setmetatable({ tufts = false, bare = 0 }, { __index = opts }))
   end,
@@ -234,27 +240,49 @@ register {
 --- transition is a boundary and this is a CONDITION -- it needs to tile in
 --- every direction over a whole area.
 register {
-  name = "sparse_grass", title = "Sparse grass", base = "straw_2",
+  -- Straw thinning back to the soil under it. It is the STEP BETWEEN dry
+  -- grass and bare dirt, so it takes the darker straw base and lets the soil
+  -- through generously: straw_2 (76) against dry grass at straw_3 (105) and
+  -- dirt at earth_3 (71), which puts it visibly between the two in a field.
+  name = "sparse_grass", family = "soft", kin = "grass", generator = "sparse_grass", title = "Sparse grass", base = "straw_2",
   fill = function(s, r, opts)
-    materials.grass.fill(s, r, setmetatable({ tufts = false, bare = 0, thin = 0.34 },
-      { __index = opts }))
+    materials.grass.fill(s, r, setmetatable({
+      tufts = false, bare = 0, thin = 0.34, base = "straw_2",
+      -- against straw_2 the near-value neighbour is earth_3 again (71 vs 76)
+      thin_color = "earth_3", mat_color = "earth_3",
+    }, { __index = opts }))
   end,
 }
 
 --- Trodden ground: soil with the last of the straw in it. The other end of the
 --- same gradient as sparse_grass, read from the dirt side.
 register {
-  name = "dirt_grass", title = "Dirt and grass", base = "earth_3",
+  -- Trodden ground: soil with the last of the straw still in it, so it sits
+  -- between bare dirt and dry grass.
+  --
+  -- SEPARATION COMES FROM THE BASE, NOT FROM THE PATCH, and that took a wrong
+  -- turn to learn. Keeping the base at earth_3 (71) and lifting the dust patch
+  -- to straw_3 (105) did separate the terrain's average from dirt's -- and put
+  -- a 34-luminance patch inside every tile, which is a value event, not a
+  -- drift. A field of it came out as leopard spots on a 16px pitch: exactly
+  -- the failure ART_STYLE.md 2 names, arrived at from a new direction.
+  --
+  -- earth_4 (93) is the honest base for soil with growth in it, and against it
+  -- straw_3 (105) is a 12-step drift -- quiet enough to be texture. The
+  -- terrain then reads between dirt (71) and dry grass (105) by value, and
+  -- apart from concrete (86) by hue, which is warm against neutral.
+  name = "dirt_grass", family = "soft", kin = "grass", generator = "dirt_grass", title = "Dirt and grass", base = "earth_4",
   fill = function(s, r, opts)
-    materials.earth.fill(s, r, setmetatable({ dust = "straw_2", drift = 0.30 },
-      { __index = opts }))
+    materials.earth.fill(s, r, setmetatable({
+      base = "earth_4", dust = "straw_3", drift = 0.24,
+    }, { __index = opts }))
   end,
 }
 
 --- Road. Intact, because damage is a decal and a road that is uniformly broken
 --- is not a broken road, it is a texture.
 register {
-  name = "asphalt", title = "Asphalt", base = "asphalt_3",
+  name = "asphalt", family = "hard", kin = "road", generator = "cracked_asphalt", title = "Asphalt", base = "asphalt_3",
   fill = function(s, r, opts) materials.asphalt.fill(s, r, opts) end,
 }
 
@@ -263,7 +291,7 @@ register {
 --- break-up is in the FILL, spread across the tile rather than concentrated,
 --- which is the honest read for a surface that has failed everywhere.
 register {
-  name = "broken_asphalt", title = "Heavily damaged asphalt", base = "asphalt_3",
+  name = "broken_asphalt", family = "hard", kin = "road", generator = "broken_asphalt", title = "Heavily damaged asphalt", base = "asphalt_3",
   fill = function(s, r, opts)
     materials.asphalt.fill(s, r, setmetatable({ ruin = 0.75 }, { __index = opts }))
   end,
@@ -271,7 +299,7 @@ register {
 
 --- Concrete hardstanding: yards, aprons, slab paths.
 register {
-  name = "concrete", title = "Concrete ground", base = "concrete_4",
+  name = "concrete", family = "hard", kin = "slab", generator = "concrete_ground", title = "Concrete ground", base = "concrete_4",
   fill = function(s, r, opts)
     materials.concrete.fill(s, r, setmetatable({ wear = 0.35, ground = true },
       { __index = opts }))
@@ -282,7 +310,7 @@ register {
 --- it read as wet: there is no blue and no shine in this palette, so depth of
 --- value is the only cue available.
 register {
-  name = "mud", title = "Mud", base = "earth_2",
+  name = "mud", family = "soft", kin = "soil", generator = "mud_ground", title = "Mud", base = "earth_2",
   fill = function(s, r, opts)
     materials.earth.fill(s, r, setmetatable({ base = "earth_2", dust = "earth_3", drift = 0.22 },
       { __index = opts }))
@@ -293,16 +321,19 @@ register {
 --- terrain whose texture is legitimately granular, so it is the one place
 --- where paired specks are the grammar rather than a defect.
 register {
-  name = "gravel", title = "Gravel / rocky dirt", base = "earth_3",
+  name = "gravel", family = "soft", kin = "soil", generator = "gravel_dirt", title = "Gravel / rocky dirt", base = "earth_3",
   fill = function(s, r, opts)
     materials.earth.fill(s, r, setmetatable({ dust = "straw_2", drift = 0.14 },
       { __index = opts }))
     local grit = r:branch("gravel")
     -- Stones are the SURFACE here, not an event on it, so they are dense --
     -- but still drawn as stones (a lit cap and its shadow), never as noise.
-    materials.earth.stones(s, grit:range(5, 7), grit, {
+    -- Brighter, denser stones than a soil tile's: gravel has to read as a
+    -- GREY speckled surface, which is what separates it from bare dirt in a
+    -- field (both are earth_3 underneath).
+    materials.earth.stones(s, grit:range(7, 9), grit, {
       area = opts and opts.area, mask = opts and opts.mask,
-      color = "concrete_3", shadow = "earth_2",
+      color = "concrete_4", shadow = "earth_2",
     })
   end,
 }
@@ -404,8 +435,16 @@ end
 --- confetti with extra steps.
 local function grass_edge(s, boundary, r, opts)
   if #boundary == 0 then return end
+  -- EDGE DECORATION IS A MINORITY EVENT, exactly as a mark on a field tile is.
+  -- One or two tufts on every transition tile turns a boundary twenty cells
+  -- long into a hedge of forty identical tufts on a 16px pitch -- the confetti
+  -- failure of ART_STYLE.md 10, drawn along a line instead of over an area,
+  -- and just as fatal. It also put 35 transition tiles over their busyness
+  -- ceiling. At one tile in three the boundary reads as growth catching along
+  -- an edge, which is what it is.
+  if not r:chance(0.34) then return end
   local lean = r:chance(0.5) and 1 or -1
-  local n = math.min(2, math.max(1, #boundary // 7))
+  local n = 1
   for i = 1, n do
     local at = boundary[r:range(1, #boundary)]
     materials.grass.tufts(s, 1, r, {
@@ -421,9 +460,13 @@ end
 --- unrelated marks meeting.
 local function soil_over_hard_edge(s, boundary, r, opts)
   if #boundary < 4 then return end
+  -- A minority event, for the same reason as grass_edge: a road edge that
+  -- crumbles on every single cell has not crumbled, it has been drawn that
+  -- way.
+  if not r:chance(0.40) then return end
   local mask = opts and opts.mask
   -- the hard surface crumbles just OUTSIDE the soil, on the base side
-  for i = 1, math.max(1, #boundary // 8) do
+  for i = 1, math.max(1, #boundary // 10) do
     local at = boundary[r:range(1, #boundary)]
     materials.asphalt.breakup(s, at[1] + r:range(-1, 1), at[2] + r:range(-1, 1),
       r:range(3, 5), r, { mask = mask })
@@ -469,20 +512,102 @@ local function grass_over_hard_edge(s, boundary, r, opts)
   -- along its whole length is not a surface failing at its edge, it is a
   -- drawn line -- and stacking a crack under every tuft on every tile put
   -- these tiles over the transition ceiling (measured 0.350 against 0.34).
-  if r:chance(0.45) then
+  if r:chance(0.30) then
     local at = boundary[r:range(1, #boundary)]
     materials.asphalt.crack(s, at[1], at[2], r:range(4, 7), r, { mask = mask, branches = 0 })
   end
   grass_edge(s, boundary, r, opts)
 end
 
-pair { base = "dirt",     over = "dry_grass",      amplitude = 0.30, edge = grass_edge }
-pair { base = "dirt",     over = "sparse_grass",   amplitude = 0.32, edge = grass_edge }
-pair { base = "asphalt",  over = "dirt",           amplitude = 0.22, edge = soil_over_hard_edge }
-pair { base = "asphalt",  over = "dry_grass",      amplitude = 0.24, edge = grass_over_hard_edge }
-pair { base = "concrete", over = "dirt",           amplitude = 0.20, edge = soil_over_hard_edge }
-pair { base = "concrete", over = "dry_grass",      amplitude = 0.22, edge = grass_over_hard_edge }
-pair { base = "asphalt",  over = "concrete",       amplitude = 0.05, edge = cast_joint }
+-- THE PAIR TABLE IS DERIVED, NOT LISTED.
+--
+-- Hand-registering pairs does not scale and, worse, it silently decides what a
+-- level may do. Seven pairs were written out by hand first; the moment three
+-- QA scenes were composed from the library they asked for thirty, because a
+-- level puts gravel against concrete and sparse grass against dry grass
+-- whether or not anyone wrote that pair down. Anything missing is a hole a
+-- designer falls into, so every plausible combination is generated from two
+-- declarations on each terrain:
+--
+--   family  "soft" (soil, grass, mud, gravel) or "hard" (tarmac, concrete).
+--           What KIND of surface it is.
+--   kin     the material it is a condition OF: soil, grass, road, slab.
+--           Two terrains with the same kin are the same stuff in different
+--           states.
+--
+-- and one rule about what the boundary between them MEANS:
+--
+--   same kin              a GRADATION, not a boundary. Dry grass thinning to
+--                         sparse grass is one surface changing, so the edge is
+--                         very ragged and carries NO decoration at all --
+--                         drawing a lip or a line of tufts along it would
+--                         invent an event that is not there. This is the
+--                         commonest case in a real map by a wide margin (314
+--                         cells of one scene) and the one hand-listing missed.
+--   soft over hard        something has encroached on a made surface, so the
+--                         made surface fails at the edge: crumbling and silt
+--                         (soil) or a crack with weeds in it (grass).
+--   hard against hard     two poured surfaces butt at a CAST JOINT, so almost
+--                         no wander: a poured edge that wanders is not poured.
+--   soft against soft     different materials meeting in the open: a ragged
+--                         edge with vegetation leaning off the grassy side.
+--
+-- `base` is what is already there and `over` is what arrived, which decides
+-- which side the decoration hangs off. Hard is always the base when a soft
+-- terrain meets it -- soil arrives on a road, not the other way round.
+
+local KIN_AMPLITUDE = 0.34     -- a gradation wanders freely
+local SOFT_AMPLITUDE = 0.30
+local HARD_AMPLITUDE = 0.05    -- a cast joint barely wanders
+
+--- Should these two terrains ever meet in a level? Everything may meet
+--- everything except a pairing that would describe a physical impossibility.
+--- There is only one: mud is standing water in a hollow and cannot sit
+--- directly against a raised poured slab without the slab's edge, so it goes
+--- through soil first. Being explicit about the single exclusion is better
+--- than an allowlist that quietly omits cases.
+local function compatible(a, b)
+  if a.kin == "slab" and b.name == "mud" then return false end
+  if b.kin == "slab" and a.name == "mud" then return false end
+  return true
+end
+
+--- Order a pair and choose its boundary. Returns base, over, amplitude, edge.
+local function classify(a, b)
+  if a.kin == b.kin then
+    -- A gradation. Order it so the more-covered condition arrives on the
+    -- barer one, which is the direction the change actually happens in.
+    local base, over = a, b
+    if a.name > b.name then base, over = b, a end
+    return base, over, KIN_AMPLITUDE, nil
+  end
+  if a.family == "hard" and b.family == "hard" then
+    return a, b, HARD_AMPLITUDE, cast_joint
+  end
+  if a.family == "hard" then
+    return a, b, SOFT_AMPLITUDE - 0.06,
+      b.kin == "grass" and grass_over_hard_edge or soil_over_hard_edge
+  end
+  if b.family == "hard" then
+    return b, a, SOFT_AMPLITUDE - 0.06,
+      a.kin == "grass" and grass_over_hard_edge or soil_over_hard_edge
+  end
+  -- soft against soft: the grassy one arrives on the bare one
+  local base, over = a, b
+  if a.kin == "grass" and b.kin ~= "grass" then base, over = b, a end
+  return base, over, SOFT_AMPLITUDE, over.kin == "grass" and grass_edge or nil
+end
+
+for i = 1, #terrain.names do
+  for j = i + 1, #terrain.names do
+    local a = terrain.get(terrain.names[i])
+    local b = terrain.get(terrain.names[j])
+    if compatible(a, b) then
+      local base, over, amplitude, edge = classify(a, b)
+      pair { base = base.name, over = over.name, amplitude = amplitude, edge = edge }
+    end
+  end
+end
 
 function terrain.pair(id)
   return terrain.pairs[id] or error("unknown terrain pair '" .. tostring(id) .. "'", 2)

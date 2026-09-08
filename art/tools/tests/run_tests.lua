@@ -15,14 +15,26 @@ local style, palette, rng = toolkit.style, toolkit.palette, toolkit.rng
 local P, materials = toolkit.pixels, toolkit.materials
 local generators, validators, previews = toolkit.generators, toolkit.validators, toolkit.previews
 
--- How many seeds the per-asset sweep covers. The default keeps the suite fast
--- enough to run on every edit; `--seeds 64` is the number ART_STYLE.md asks
--- for before shipping, and `art/tools/export.lua` validates every variant it
--- actually writes, so nothing reaches the game unchecked either way.
+-- How many seeds the per-asset sweep covers, as a CEILING. Each generator is
+-- swept over twice the number of variants it actually ships, floored at 8 and
+-- capped here -- so a ground tile shipping 12 variants gets 24 seeds and a
+-- transition tile shipping 3 gets 8.
+--
+-- That proportionality matters at this size. The library is 725 generators,
+-- 615 of them transition tiles, and a flat 24 seeds means 17,000 builds for a
+-- set where only three seeds per generator are ever exported. Validating
+-- double what ships is real margin; validating eight times what ships is
+-- waiting.
+--
+-- `--full` sweeps everything at 64 seeds, which is the number ART_STYLE.md
+-- asks for before shipping, and `export.lua` validates every variant it
+-- actually writes -- so nothing reaches the game unchecked either way.
 local SWEEP_SEEDS = 24
+local SWEEP_MIN = 8
+local FULL = false
 for i, a in ipairs(arg or {}) do
   if a == "--seeds" then SWEEP_SEEDS = math.tointeger(arg[i + 1]) or SWEEP_SEEDS end
-  if a == "--full" then SWEEP_SEEDS = 64 end
+  if a == "--full" then SWEEP_SEEDS = 64; FULL = true end
 end
 
 local passed, failed = 0, {}
@@ -307,8 +319,11 @@ test("every generator, every seed: validators, determinism, wrap, brightness", f
     local cap = style.max_edge_density[gen.surface]
     local seen, distinct = {}, 0
     local lo, hi = 255, 0
+    -- twice what ships, floored and capped (see SWEEP_SEEDS)
+    local seeds = FULL and SWEEP_SEEDS
+      or math.min(SWEEP_SEEDS, math.max(SWEEP_MIN, gen.variants * 2))
 
-    for seed = 1, SWEEP_SEEDS do
+    for seed = 1, seeds do
       local surface = generators.build(name, seed)
       checked = checked + 1
 
@@ -354,9 +369,9 @@ test("every generator, every seed: validators, determinism, wrap, brightness", f
     -- Variants must genuinely differ. A transition tile is picked by
     -- connectivity rather than by looks and only ships three variants, so it
     -- is held to its own variant count rather than to the sweep length.
-    local want = math.min(SWEEP_SEEDS, math.max(3, gen.variants)) - 2
+    local want = math.min(seeds, math.max(3, gen.variants)) - 2
     assert(distinct >= want,
-      ("%s produced only %d distinct tiles in %d seeds"):format(name, distinct, SWEEP_SEEDS))
+      ("%s produced only %d distinct tiles in %d seeds"):format(name, distinct, seeds))
 
     if gen.surface == "ground" then
       assert(hi - lo <= 12,
@@ -364,7 +379,7 @@ test("every generator, every seed: validators, determinism, wrap, brightness", f
       ground_luma[#ground_luma + 1] = name
     end
   end
-  assert(checked == SWEEP_SEEDS * #generators.names, "swept " .. checked .. " assets")
+  assert(checked >= SWEEP_MIN * #generators.names, "swept " .. checked .. " assets")
   assert(#ground_luma >= 9, "the ground set is the point; do not let it shrink")
 end)
 

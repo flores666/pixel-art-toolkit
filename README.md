@@ -13,53 +13,81 @@ and grime ramps with the game's existing metro art.
 ```
 art/tools/
   init.lua            bootstrap: sets package.path, returns every module
-  style.lua           every hard rule as data (grid, light, budgets, dither)
+  style.lua           every hard rule as data (grid, light, budgets, dither,
+                      terrain pinning, decal/prop/variant bounds, categories)
   palette.lua         the fixed 48-colour palette, as ten lighting ramps
   rng.lua             seeded variation: xorshift32 streams, named branches
   pixel_utils.lua     Surface + all primitives (line, polygon, cluster,
                       fracture, dither, broken runs, outline, lighting,
-                      despeckle)
+                      despeckle, components, holes, marks, analysis)
+  terrain.lua         the 9 terrains, the corner-Wang autotile, the derived
+                      pair table, and terrain.field (every ground tile)
+  wear.lua            the shared variation channels (rust, dirt, staining,
+                      cracks, damage, missing pieces, rubble, vegetation)
+  object.lua          the shared standing-object grammar (outline, cleanup,
+                      contact shadow, upright/rail/box/cylinder members)
+  scenes.lua          composes whole locations from library assets: terrain
+                      map -> autotile resolution -> runs -> objects -> decals
+  manifest.lua        the JSON metadata an importer needs
   aseprite.lua        the only module that knows Aseprite exists
   materials/          earth, grass, asphalt, debris (above ground)
                       concrete, metal, wood, rust, dirt (shared with the metro)
                       each owns its own marks: soil crust, dry tufts, road
-                      fractures and break-out, decayed cast joints, fence posts,
+                      fractures and break-up, decayed cast joints, fence posts,
                       exposed reinforcement
-  generators/         ground:    dirt_ground, dry_grass, cracked_asphalt
-                      structure: concrete_ruin_wall, rusted_fence
-                      props:     supply_crate, rusted_barrel
-  validators/         the seven ship/no-ship rules
-  previews/           10x10 tile sheets, tiling checks, grid-visibility report,
-                      palette strip
+  generators/         ground:      dirt, dry/sparse grass, dirt+grass, asphalt,
+                                   broken asphalt, concrete, mud, gravel
+                      transitions: 35 terrain pairs x 14 corner masks, plus
+                                   worn edge families (one implementation)
+                      decals:      16 overlay families
+                      vegetation:  bushes, scrub, weeds, trees, stumps, logs
+                      rocks:       by scale, and clusters
+                      walls:       12-piece modular kit, socket-verified
+                      fences:      10-piece modular kit, socket-verified
+                      road_kit:    barriers, signs, poles, lamps, cabinets,
+                                   pipes, drainage, scrap
+                      rubble:      10 destruction piles
+                      props:       crates, lockers, furniture, bins,
+                                   barricades, machines
+  validators/         the ship/no-ship rules: 10 per asset, 2 per variant
+                      group, 1 across the library (sockets)
+  previews/           10x10 tile sheets, tiling checks, grid-visibility
+                      report, palette strip
   png.lua             pure-Lua PNG writer (headless export needs no Aseprite)
-  export.lua          batch export + VALIDATION.md
-  commands/           Aseprite menu entries
-  tests/              headless test run (no Aseprite needed)
-  package.json        Aseprite extension manifest
 ```
 
-## Install into Aseprite
+## What is in the library
 
-Zip the contents of `art/tools` (with `package.json` at the top level of the
-zip), rename it to `no-way-up-pixel-toolkit.aseprite-extension`, and install it
-with **Edit → Preferences → Extensions → Add Extension**:
+684 generators. Everything is a pure function of (generator, seed), so a level
+may reference a tile by seed forever.
 
-```sh
-cd art/tools && zip -r ../../no-way-up-pixel-toolkit.aseprite-extension . -x '*.ppm' && cd -
-```
+| category | generators | what |
+| --- | --- | --- |
+| `ground` | 9 | the terrain field tiles |
+| `transition` | 615 | 35 pairs x 14 corner masks, + worn edges on 6 pairs |
+| `decal` | 16 | placeable overlays: stones, cracks, stains, litter, weeds |
+| `vegetation` | 10 | bushes, scrub, tufts, trees, stumps, logs |
+| `rock` | 4 | small, medium, large 32x32, cluster 32x16 |
+| `wall` | 12 | the modular ruined-wall kit |
+| `fence` | 10 | the modular fence/barrier kit |
+| `road` + `industrial` | 21 | roadside and infrastructure furniture |
+| `rubble` | 10 | destruction piles by scale and material |
+| `prop` | 17 | containers, furniture, bins, barricades, machines |
 
-The commands then appear under **File → Scripts → No Way Up**:
+Two ideas carry the whole thing:
 
-| command | what it does |
-| --- | --- |
-| Generate asset… | builds a generator into a new sprite (or a strip of seed variants) and validates it first |
-| Preview sheet… | opens a 10×10 field; turn off *Vary seeds* to check tiling |
-| Validate… | runs the rules on the active sprite, or over every generator × 64 seeds |
-| Load palette | puts the fixed palette on the active sprite for hand-drawing |
+**Detail lives in decals, not in ground tiles.** A stone drawn into a 16x16
+field tile is a stone printed once per cell, a hundred times a screen, on a
+16 px pitch -- every tile legal and the field static. So the field tiles are
+nearly flat (one hairline mark on a minority of variants, which is how the
+game's own authored floor tiles are built) and everything larger is placed
+where the level wants it.
 
-During development you can skip packaging and copy `art/tools` into the Aseprite
-scripts folder (`~/.config/aseprite/scripts`) instead; the commands are then
-under **File → Scripts** without a submenu.
+**Modular pieces declare their edges, and the claim is checked.** A wall or
+fence piece names what each edge presents (`sockets`), and
+`validators.check_sockets` verifies that every piece presenting a socket
+agrees with every other on that edge's opaque rows and base material. That
+check found nine real bugs that are invisible in a single tile.
 
 ## Run it without Aseprite
 

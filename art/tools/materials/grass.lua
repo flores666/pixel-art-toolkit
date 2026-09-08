@@ -22,7 +22,21 @@
 local P = require("pixel_utils")
 local palette = require("palette")
 
-local grass = { name = "grass", kind = "base", ramp = "straw", base = "straw_2" }
+-- The field base is straw_3, not straw_2, and that is the single change that
+-- made a grass field distinguishable from a dirt field.
+--
+-- The palette's warm mid-tones are crowded: earth_3 is luminance 71, grass_3
+-- is 74 and straw_2 is 76. With dry grass based on straw_2 and bare soil on
+-- earth_3, five of the nine terrains sat inside five luminance of each other
+-- at a similar hue, and a composed scene came out as one undifferentiated
+-- brown mass -- every tile correct in isolation and the map unreadable. No
+-- amount of intra-tile work fixes that; the BASES have to separate.
+--
+-- straw_3 (105) is 34 above bare soil, which reads clearly, and it is squarely
+-- within the art direction: ART_STYLE.md says the brightest thing in the
+-- palette is dead straw and that the brightest pixel in a grass tile is
+-- bleached straw catching the light. Olive still tops out at grass_5.
+local grass = { name = "grass", kind = "base", ramp = "straw", base = "straw_3" }
 
 --- A dry field. opts.green (0..1) how much has come back this year,
 --- opts.bare (0..1) how much soil shows through, opts.thin (0..1) how much of
@@ -42,6 +56,13 @@ function grass.fill(surface, rng_stream, opts)
   local green = opts.green or 0.5
   local bare = opts.bare or 0.3
   local thin_amount = opts.thin or 0.17
+  -- What shows where the mat is thin. It must be NEAR THE BASE IN VALUE AND
+  -- HUE (ART_STYLE.md 2), and against straw_3 that is wood_4 -- luminance 104
+  -- against 105, warm on warm, which reads as matted thatch trodden into the
+  -- surface rather than as a mark. Bare soil against straw_3 is a 34-step
+  -- jump; that is a full value event, so it belongs to `bare` below, which is
+  -- occasional by design.
+  local under = opts.thin_color or "wood_4"
   local want_tufts = opts.tufts
   if want_tufts == nil then want_tufts = true end
   local field = area.w * area.h
@@ -57,7 +78,7 @@ function grass.fill(surface, rng_stream, opts)
     thin:range(area.x, area.x + area.w - 1), thin:range(area.y, area.y + area.h - 1),
     thin:range(math.floor(field * math.max(0, thin_amount - 0.03)),
                math.floor(field * (thin_amount + 0.03))),
-    "earth_3", thin, { mask = mask, spread = 1.0 })
+    under, thin, { mask = mask, spread = 1.0 })
 
   -- Matted, shadowed dead growth: one small darker drift. Straw, not olive.
   -- Green is spent ONLY on tufts, and only on some of them (below). A broad
@@ -67,12 +88,45 @@ function grass.fill(surface, rng_stream, opts)
   -- as equal weight: at constant value a hue that far from the base reads as a
   -- loud colour patch, which is what camouflage IS. It turns the field
   -- green-and-brown mottled, exactly the read this rebuild exists to kill.
+  -- Shadowed, matted dead growth: one small darker drift. Named rather than a
+  -- ramp shift, because a step down the straw ramp from straw_3 lands on
+  -- straw_2 -- 29 luminance, a value event where a quiet drift was wanted.
+  -- earth_4 sits 12 under the base and stays warm.
   local mat = rng_stream:branch("grass_mat")
   P.cluster(surface,
     mat:range(area.x, area.x + area.w - 1), mat:range(area.y, area.y + area.h - 1),
     mat:range(math.floor(field * 0.05), math.floor(field * 0.09)),
-    palette.shift(base, -1), mat, { mask = mask, spread = 1.2 })
+    palette.resolve(opts.mat_color or "earth_4"), mat, { mask = mask, spread = 1.2 })
 
+
+  -- FINE DIRECTIONAL TEXTURE. This is what distinguishes a grass field from a
+  -- soil field, and leaving it out was the cost of moving tufts to decals: a
+  -- grass tile with no vegetation in it at all is mottled brown, and `dirt`,
+  -- `sparse_grass` and `dry_grass` became three names for the same surface.
+  --
+  -- It is not a tuft and must not become one. Short broken runs, one pixel
+  -- wide, ALL LEANING THE SAME WAY, drawn in the same near-value neighbour the
+  -- drifts use -- so it is texture too quiet to count (ART_STYLE.md 2) and
+  -- what the eye reads is direction rather than marks. Direction is the whole
+  -- point: soil has none, and that is the difference.
+  local lay = rng_stream:branch("grass_lay")
+  local lean = lay:chance(0.5) and 1 or -1
+  -- 0.45 strokes per column, not 0.55. At 0.55 a dry-grass FIELD measured
+  -- 0.221 against the 0.22 field ceiling -- no headroom at all, and the
+  -- ceilings are checked per seed while levels reference seeds forever
+  -- (ART_STYLE.md 7). The read does not depend on the last tenth: the texture
+  -- accumulates across the field, and neighbouring cells supply it for free.
+  local strokes = math.floor(area.w * (opts.texture or 0.45))
+  for _ = 1, strokes do
+    local sx = lay:range(area.x, area.x + area.w - 1)
+    local sy = lay:range(area.y, area.y + area.h - 1)
+    local len = lay:range(2, 4)
+    local px = sx
+    for k = 0, len - 1 do
+      P.pixel(surface, px, sy - k, palette.resolve(opts.mat_color or "earth_4"), mask)
+      if k > 0 and k % 2 == 0 then px = px + lean end
+    end
+  end
 
   -- Standing growth: ONE clump per tile, and not on every tile. Two to four
   -- stalks out of one root, all leaning the same way. Scattering three or four
