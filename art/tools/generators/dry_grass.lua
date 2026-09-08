@@ -29,12 +29,15 @@ function gen.build(rng_stream, opts)
   }
   grass.fill(s, rng_stream, { green = green, bare = opts.bare or 0.3 })
 
-  -- structure: a few standing stalks, bleached at the tip
-  local stalks = rng_stream:branch("stalks")
-  for _ = 1, stalks:range(1, 2) do
-    -- seeded anywhere, including the edges: the surface wraps, and stalks
-    -- that avoid the top rows leave a measurable band at every tile boundary
-    grass.blade(s, stalks:range(0, 15), stalks:range(0, 15), stalks:range(2, 3), stalks, {})
+  -- structure: the odd tall dead stem left standing above the mat. One, on a
+  -- minority of tiles: the clump inside grass.fill is already the tile's
+  -- vegetation, and a second mark on every cell is how the first draft turned
+  -- into confetti. Seeded anywhere including the edges -- the surface wraps,
+  -- and detail that avoids the top rows leaves a measurable calm band at every
+  -- tile boundary, which is a grid by another route.
+  if rng_stream:chance(0.22) then
+    local stalks = rng_stream:branch("stalks")
+    grass.blade(s, stalks:range(0, 15), stalks:range(0, 15), stalks:range(4, 6), stalks, {})
   end
 
   -- cleanup

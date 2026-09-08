@@ -82,9 +82,52 @@ function metal.scratch(surface, x, y, length, rng_stream, opts)
   end
 end
 
+--- An upright structural member: a post, standing in front of the sheet it
+--- carries. Three pixels wide, full height, with its own lit and shaded faces
+--- and a cast shadow on the sheet to its right.
+--
+-- Written as explicit ramp steps rather than as ramp shifts, because a post is
+-- a separate PIECE of steel and not a highlight on the one behind it: it has
+-- to hold its own values whatever the sheet does under it (corrugated, flat,
+-- already corroded), and shifting whatever happens to be there would let the
+-- fold pattern show straight through the member.
+function metal.post(surface, x, rng_stream, opts)
+  opts = opts or {}
+  local area = P.area(surface, opts.area)
+  local width = opts.width or 3
+  local base = opts.base or metal.base
+  local ramp, index = palette.slot(palette.resolve(base))
+  local y0, y1 = area.y, area.y + area.h - 1
+  for i = 0, width - 1 do
+    -- lit left face, body, shaded right face
+    -- a full two steps either side of the body: a member three pixels wide
+    -- only reads as a separate piece of steel if its faces clearly separate
+    -- from the sheet behind it
+    local step = i == 0 and index + 2 or (i == width - 1 and index - 2 or index)
+    for y = y0, y1 do
+      surface:set(x + i, y, palette.step(ramp, step))
+    end
+  end
+  -- the shadow the post throws onto the sheet, per the fixed upper-left key
+  for y = y0, y1 do
+    local c = surface:get(x + width, y)
+    if c ~= palette.TRANSPARENT then surface:set(x + width, y, palette.shift(c, -1)) end
+  end
+  return x, width
+end
+
 --- Corrugation: the profile of a cheap sheet-metal fence. Every `pitch`
---- columns, a shaded valley with the lit crest of the next fold beside it --
---- one continuous read across the tile, and it wraps.
+--- columns, a shaded valley -- one continuous read across the tile, and it
+--- wraps.
+--
+-- `opts.crest` adds the lit crest of the next fold beside each valley. It is
+-- OFF by default, and that is a considered default rather than a saving: with
+-- both faces drawn, a pitch that fits a 16px tile puts a light and a dark
+-- column in every four, and the fold pattern then occupies the whole tile and
+-- most of its busyness budget. There is nothing left for the frame, the
+-- panelling or the damage to read against, so the sheet stops being a fence
+-- and becomes a texture -- which is exactly what it did. A shaded valley alone
+-- still reads as a fold, and it leaves the tile room to say what it is.
 function metal.corrugate(surface, rng_stream, opts)
   opts = opts or {}
   local area = P.area(surface, opts.area)
@@ -94,8 +137,10 @@ function metal.corrugate(surface, rng_stream, opts)
     for y = area.y, area.y + area.h - 1 do
       local c = surface:get(x, y)
       if c ~= palette.TRANSPARENT then surface:set(x, y, palette.shift(c, -1)) end
-      local lit = surface:get(x + 1, y)
-      if lit ~= palette.TRANSPARENT then surface:set(x + 1, y, palette.shift(lit, 1)) end
+      if opts.crest then
+        local lit = surface:get(x + 1, y)
+        if lit ~= palette.TRANSPARENT then surface:set(x + 1, y, palette.shift(lit, 1)) end
+      end
     end
   end
 end

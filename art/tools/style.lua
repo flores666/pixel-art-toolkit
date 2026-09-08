@@ -31,13 +31,21 @@ style.cluster_min = 2
 style.cluster_max = 10
 style.speck_min = 2      -- smallest allowed "speck": still two pixels
 style.speck_max = 3
-style.max_isolated_pixels = 6      -- absolute cap per 16x16 tile
-style.max_isolated_ratio = 0.04    -- and never more than 4% of opaque pixels
+-- Two caps, and BOTH apply: the validator binds on whichever is tighter.
+style.max_isolated_pixels = 6      -- absolute cap per 16x16 tile, and
+style.max_isolated_ratio = 0.04    -- never more than 4% of opaque pixels
 
 -- Texture busyness -----------------------------------------------------------
 -- Fraction of neighbouring pixel pairs that differ (pixel_utils.edge_density).
--- Measured on the game's own hand-authored art: its floor tiles sit at
--- 0.17-0.19 and its wall faces at 0.25.
+-- Measured on the game's own hand-authored art: its platform FIELD tiles -- the
+-- ones laid a hundred at a time, which is the case that matters -- sit at
+-- 0.10-0.17 and hold 74-82% of their area at a single colour; its wall faces
+-- sit at 0.25. (Its busiest authored tiles run far higher, up to 0.66, but
+-- those are gravel and void tiles used as accents, not as fields.)
+--
+-- The measure is blind to CONTRAST: it counts pairs that differ, not by how
+-- much, so it cannot tell a calm near-value patch from a loud one. It is a
+-- ceiling, never a target.
 --
 -- The ceiling depends on what the surface is FOR, which each generator
 -- declares as `surface`:
@@ -72,7 +80,7 @@ style.grid = {
   min_seam_contrast = 0.40,
   max_tile_luma_sd = 2.5,    -- per-tile average luminance, 0-255 scale
   -- Busyness averaged over a whole 10x10 field. Held at the level of the
-  -- game's own authored floor tiles (0.17-0.19): individual tiles may carry a
+  -- game's own authored platform field tiles (0.10-0.17): individual tiles may carry a
   -- crack or a pothole, but a hundred of them together must still read as
   -- ground rather than as static. This is the number that caught the first
   -- above-ground draft, where every single tile had a feature on it.

@@ -19,79 +19,95 @@ function concrete.fill(surface, rng_stream, opts)
 
   P.rect_fill(surface, area.x, area.y, area.w, area.h, base, { mask = mask })
 
-  -- Broad patches: one step darker, one step lighter. Big and few, so the
-  -- surface reads as poured concrete rather than noise.
-  -- Few and large: a big blob has less edge per pixel than several small ones,
-  -- which is the difference between "poured concrete" and "static".
-  local dark = rng_stream:branch("patch_dark")
-  for _ = 1, 2 + rng_stream:range(0, 1) do
-    P.cluster(surface,
-      dark:range(area.x, area.x + area.w - 1), dark:range(area.y, area.y + area.h - 1),
-      dark:range(8, 16), palette.shift(base, -1), dark, { mask = mask })
-  end
-  local light = rng_stream:branch("patch_light")
-  for _ = 1, 1 + rng_stream:range(0, 1) do
-    P.cluster(surface,
-      light:range(area.x, area.x + area.w - 1), light:range(area.y, area.y + area.h - 1),
-      light:range(4, 9), palette.shift(base, 1), light, { mask = mask })
-  end
+  -- ONE broad weathering patch, drawn as an area. Concrete varies by staining,
+  -- not by grain: three or four small patches plus a scatter of aggregate
+  -- pairs is five or six marks on every cell, and a wall built out of those
+  -- reads as static behind whatever else is on it. The patch is a full ramp
+  -- step -- unlike the ground tiles, a wall is ALLOWED contrast, because it is
+  -- exempt from the field discipline and its own construction lines are
+  -- stronger than anything the weathering does.
+  local stain = rng_stream:branch("patch_dark")
+  local field = area.w * area.h
+  P.cluster(surface,
+    stain:range(area.x, area.x + area.w - 1), stain:range(area.y, area.y + area.h - 1),
+    stain:range(math.floor(field * 0.12), math.floor(field * 0.20)),
+    palette.shift(base, -1), stain, { mask = mask, spread = 1.1 })
 
-  -- Aggregate: pairs of pixels, never singles.
-  local grit = rng_stream:branch("aggregate")
-  P.speckle(surface, 1 + math.floor(2 * wear), palette.shift(base, -1), grit,
-    { area = area, mask = opts.mask, max_size = 2 })
-  if wear > 0.7 then
-    P.speckle(surface, 1, palette.shift(base, -2), grit, { area = area, mask = opts.mask, max_size = 2 })
+  -- Aggregate showing through where the surface has worn thin: ONE pair of
+  -- pixels, and only on a beaten wall.
+  if wear > 0.55 then
+    local grit = rng_stream:branch("aggregate")
+    P.speckle(surface, 1, palette.shift(base, 1), grit,
+      { area = area, mask = opts.mask, max_size = 2 })
   end
-  P.speckle(surface, 1, palette.shift(base, 1), grit, { area = area, mask = opts.mask, max_size = 2 })
 end
 
---- A slab joint. Cut on the tile boundary so a tiled floor shows a 16px grid.
--- The groove itself is dark; the light hits the far wall of the cut, so the
--- lit lip sits one pixel down/right of the groove and is dithered, not solid.
+--- A slab joint: the cast line between two courses. The groove is dark; the
+-- light hits the far wall of the cut, so the lit lip sits one pixel down/right
+-- of it and is drawn as broken runs rather than a solid line.
+--
+-- On a RUIN the joint is the wall's construction logic and also its main piece
+-- of decay, so it is allowed to wander a pixel off its row and to break
+-- outright where a chunk of the arris has gone. `opts.decay` (0..1) says how
+-- much: 0 is a clean cast line, 0.5 loses a few pixels of it and steps off the
+-- row here and there.
+--
+-- The invariant that makes that safe to tile: the joint is pinned to `offset`
+-- at BOTH ends of its run. A wall tile laid beside another must meet its
+-- neighbour's joint, so the line may do what it likes in the middle and
+-- nowhere else. Break that and a wall run reads as a row of broken staples.
 -- @param axis "h" or "v"
 function concrete.groove(surface, axis, offset, rng_stream, opts)
   opts = opts or {}
-  local shade = opts.color or "concrete_2"
+  local shade = palette.resolve(opts.color or "concrete_2")
   local len = axis == "h" and surface.width or surface.height
+  local decay = opts.decay or 0
   local jitter = rng_stream:branch("groove_" .. axis .. offset)
-  local i = 0
-  while i < len do
-    local x = axis == "h" and i or offset
-    local y = axis == "h" and offset or i
-    -- Occasional deeper pixel pairs keep the joint from reading as a ruler line.
-    if jitter:chance(0.18) then
-      local deep = palette.shift(shade, -1)
-      surface:set(x, y, deep)
-      surface:set(axis == "h" and i + 1 or offset, axis == "h" and offset or i + 1, deep)
-      i = i + 2
-    else
-      surface:set(x, y, shade)
-      i = i + 1
-    end
+
+  local function put(i, off, color)
+    if axis == "h" then surface:set(i, off, color) else surface:set(off, i, color) end
   end
+
+  local drift = 0            -- how far off `offset` the line currently runs
+  local i = 0
+  local gap_left = 0
+  while i < len do
+    -- pinned at both ends, whatever happens in between
+    local pinned = i == 0 or i >= len - 2
+    if pinned then drift = 0 end
+    if gap_left > 0 then
+      gap_left = gap_left - 1      -- the arris is gone here: no line at all
+    elseif not pinned and jitter:chance(decay * 0.10) then
+      gap_left = jitter:range(1, 2)
+    else
+      -- Occasional deeper pixel pairs keep the joint from reading as a ruler.
+      put(i, offset + drift, jitter:chance(0.18) and palette.shift(shade, -1) or shade)
+    end
+    if not pinned and jitter:chance(decay * 0.14) then
+      drift = drift == 0 and (jitter:chance(0.5) and 1 or -1) or 0
+    end
+    i = i + 1
+  end
+
   -- Lit lip on the far side of the cut (light comes from the upper left), as
   -- broken runs so the edge chips instead of dotting.
-  local lip_offset = offset + 1
-  local last = (axis == "h" and surface.width or surface.height) - 1
-  P.broken_run(surface, axis, lip_offset, 0, last, jitter,
+  P.broken_run(surface, axis, offset + 1, 0, len - 1, jitter,
     { delta = 1, run = opts.run or { 3, 6 }, gap = opts.gap or { 2, 4 } })
 end
 
---- A hairline crack: a short orthogonal/diagonal walk, one pixel wide, which
--- reads as a run rather than as isolated noise.
+--- A hairline crack: straight segments with 45-degree kinks, one pixel wide.
+--- Concrete cracks off a corner or a spall and runs, so this is the same
+--- fracture geometry the road uses; only the colour and the extent differ.
+--- @return the pixels it drew
 function concrete.crack(surface, x, y, length, rng_stream, opts)
   opts = opts or {}
-  local color = opts.color or "concrete_2"
-  local mask = opts.mask
-  local dirs = { { 1, 0 }, { 1, 1 }, { 0, 1 }, { 1, -1 } }
-  local d = rng_stream:pick(dirs)
-  local cx, cy = x, y
-  for i = 1, length do
-    P.pixel(surface, cx, cy, color, mask)
-    if i % 3 == 0 and rng_stream:chance(0.5) then d = rng_stream:pick(dirs) end
-    cx, cy = cx + d[1], cy + d[2]
-  end
+  return P.fracture(surface, x, y, length, opts.color or "concrete_2", rng_stream, {
+    mask = opts.mask,
+    heading = opts.heading,
+    segment = opts.segment or { 3, 5 },
+    branches = opts.branches or 1,
+    branch_length = { 2, 4 },
+  })
 end
 
 --- Spalling: a chunk broken out of the surface. It is a shallow depression, so

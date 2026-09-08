@@ -1,9 +1,26 @@
 -- materials/earth.lua -- bare soil: the default ground of the surface world.
 --
--- Grammar: a mid base, broad low-contrast patches of damp and dry soil, small
--- stones (always a lit pixel with its own shadow, never a lone dot), and dry
--- clods. Nothing here may key to a tile edge -- ground tiles are laid in
--- fields and any edge-anchored mark turns into a visible 16px grid.
+-- Grammar: a flat base, one broad very-low-contrast tone patch, the shrinkage
+-- crust of dried compacted dirt (`crust`), and small stones (`stones`, always
+-- a lit cap with its own shadow, never a lone dot).
+--
+-- Calibrated against the game's own authored ground: its platform field tiles
+-- are 74-82% ONE colour, carry their detail as hairline marks, and measure
+-- 0.10-0.17 edge density. That is what "calm enough to stand a hundred of them
+-- under the player" actually looks like, and it rules out the obvious approach
+-- of mottling the tile with patches a full ramp step away from the base --
+-- earth's ramp steps are ~19 luminance apart, so ANY solid patch of one reads
+-- as a discrete mark however large it is drawn. A hundred discrete marks laid
+-- out on a 16px pitch is pepper, and enlarging them only turns pepper into
+-- leopard spots.
+--
+-- So the tone patch stays inside a few luminance of the base (straw_2 is +5:
+-- sun-bleached dust and old growth trodden into the soil) and the form the eye
+-- actually reads is the crust -- one intentional structure per tile, hairline,
+-- and absent altogether on many of them.
+--
+-- Nothing here may key to a tile edge: ground tiles are laid in fields and any
+-- edge-anchored mark turns into a visible 16px grid.
 
 local P = require("pixel_utils")
 local palette = require("palette")
@@ -16,32 +33,38 @@ function earth.fill(surface, rng_stream, opts)
   local area = P.area(surface, opts.area)
   local mask = P.mask(surface, opts)
   local base = palette.resolve(opts.base or earth.base)
-  local wear = opts.wear or 0.5
+  local field = area.w * area.h
 
   P.rect_fill(surface, area.x, area.y, area.w, area.h, base, { mask = mask })
 
-  -- Damp hollows and dried crests. Few and large: soil reads by its patches,
-  -- not by its grain.
-  local damp = rng_stream:branch("earth_damp")
-  for _ = 1, 1 + damp:range(0, 1) do
-    P.cluster(surface,
-      damp:range(area.x, area.x + area.w - 1), damp:range(area.y, area.y + area.h - 1),
-      damp:range(12, 22), palette.shift(base, -1), damp, { mask = mask })
-  end
-  local dry = rng_stream:branch("earth_dry")
-  if dry:chance(0.7) then
-    P.cluster(surface,
-      dry:range(area.x, area.x + area.w - 1), dry:range(area.y, area.y + area.h - 1),
-      dry:range(8, 14), palette.shift(base, 1), dry, { mask = mask })
-  end
+  -- Dust and bleached dead growth trodden into the soil. Drawn LARGE and
+  -- lobed, and only a few luminance steps off the base, so it breaks the
+  -- flatness without becoming something the eye counts. Its coverage barely
+  -- varies from seed to seed, which is what holds the per-tile mean luminance
+  -- steady -- tiles that differ in overall brightness lay a field out as a
+  -- chequerboard of light and dark cells, however good each cell is alone.
+  local dust = rng_stream:branch("earth_dust")
+  P.cluster(surface,
+    dust:range(area.x, area.x + area.w - 1), dust:range(area.y, area.y + area.h - 1),
+    dust:range(math.floor(field * 0.16), math.floor(field * 0.24)),
+    palette.resolve(opts.dust or "straw_2"), dust, { mask = mask, spread = 1.0 })
+end
 
-  -- Clods: two-pixel specks, the smallest mark the style allows, and only on
-  -- ground that has actually been churned up.
-  if wear > 0.6 then
-    local clod = rng_stream:branch("earth_clod")
-    P.speckle(surface, 1, palette.shift(base, -2), clod,
-      { area = area, mask = opts.mask, max_size = 2 })
-  end
+--- The shrinkage crust of dried compacted dirt: one hairline fracture with a
+--- branch or two. This is the tile's form -- the one thing on it the eye is
+--- meant to read -- so it is a single connected structure per tile and the
+--- generator leaves it off many of them entirely.
+function earth.crust(surface, rng_stream, opts)
+  opts = opts or {}
+  local area = P.area(surface, opts.area)
+  local mask = P.mask(surface, opts)
+  local wear = opts.wear or 0.5
+  return P.fracture(surface,
+    rng_stream:range(area.x, area.x + area.w - 1),
+    rng_stream:range(area.y, area.y + area.h - 1),
+    opts.length or rng_stream:range(6 + math.floor(6 * wear), 10 + math.floor(6 * wear)),
+    palette.resolve(opts.color or "earth_2"), rng_stream,
+    { mask = mask, branches = wear > 0.6 and 2 or 1, segment = { 3, 5 } })
 end
 
 --- Stones. A stone is a lit cap plus its own shadow, which is what separates a

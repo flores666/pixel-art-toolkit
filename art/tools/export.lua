@@ -159,12 +159,15 @@ for _, row in ipairs(batch) do
     pairs_seen > 0 and 100 * overlap / pairs_seen or 0, ok and "pass" or "FAIL")
 end
 line("")
-line("Budgets: %d colours per 16x16 tile (+%d per extra tile), %d isolated pixels per tile.",
-  toolkit.style.max_colors_per_asset, toolkit.style.extra_colors_per_tile,
-  toolkit.style.max_isolated_pixels)
+line("Budgets: %d colours per 16x16 tile (+%d per extra tile). Isolated pixels are",
+  toolkit.style.max_colors_per_asset, toolkit.style.extra_colors_per_tile)
+line("capped at %d per tile AND at %.0f%% of the opaque pixels -- both apply, and the",
+  toolkit.style.max_isolated_pixels, toolkit.style.max_isolated_ratio * 100)
+line("tighter bound is the one that binds.")
 line("")
 line("`busyness` is measured / ceiling for that surface class (pixel_utils.edge_density);")
-line("the game's own hand-authored floor tiles measure 0.17-0.19 and its wall faces 0.25.")
+line("the game's own hand-authored platform field tiles measure 0.10-0.17 (they hold")
+line("74-82%% of their area at a single colour) and its wall faces 0.25.")
 line("`variant overlap` is how much two variants share pixel-for-pixel: props keep")
 line("a fixed silhouette by design, so theirs is high and tiles' is low.")
 line("")

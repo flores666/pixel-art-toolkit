@@ -150,14 +150,21 @@ validators.rules = {
       local strays = P.isolated(surface, { wrap = wrap })
       local tiles = style.tile_count(surface.width, surface.height)
       local _, opaque = P.histogram(surface)
-      local cap = math.max(
-        style.max_isolated_pixels * tiles,
-        math.floor(opaque * style.max_isolated_ratio))
+      -- BOTH caps apply, so the tighter one binds: an absolute budget per tile
+      -- (dust is dust however large the asset is) AND a fraction of the opaque
+      -- pixels (a mostly-transparent prop may not spend the whole absolute
+      -- budget on its handful of pixels). Taking the larger of the two would
+      -- let each cap excuse a breach of the other.
+      local absolute = style.max_isolated_pixels * tiles
+      local proportional = math.floor(opaque * style.max_isolated_ratio)
+      local cap = math.min(absolute, proportional)
       if #strays > cap then
         local samples = {}
         for i = 1, math.min(MAX_SAMPLES, #strays) do samples[i] = strays[i] end
         return issue("isolated_pixels",
-          ("%d isolated pixel(s), cap is %d"):format(#strays, cap), samples, #strays)
+          ("%d isolated pixel(s), cap is %d (%d per tile, %.0f%% of %d opaque)")
+            :format(#strays, cap, style.max_isolated_pixels,
+              style.max_isolated_ratio * 100, opaque), samples, #strays)
       end
     end,
   },

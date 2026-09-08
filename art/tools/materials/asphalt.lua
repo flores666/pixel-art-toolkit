@@ -1,10 +1,20 @@
 -- materials/asphalt.lua -- road surface, and what twenty unmaintained years
 -- do to it.
 --
--- Grammar: a dark aggregate field, tar patches, cracks that branch and taper,
--- and potholes. A pothole is a depression, so it is lit like one: dark floor,
--- and the lit lip on its lower-right inner wall, the wall that faces the key
--- light.
+-- Grammar: a dark base with broad worn and tar-sealed patches, `crack` (a
+-- fracture, not a scratch), `breakup` (the surface crumbled away along a
+-- fracture) and `pothole` (a breakup deep enough to have filled with soil).
+--
+-- What makes a tile read as DAMAGED ASPHALT rather than as grey noisy ground
+-- is the relationship between those: cracks run in straight segments and kink
+-- at a joint, the surface has crumbled beside them, and everywhere else the
+-- road is intact. Scattered exposed grains do the opposite -- they make the
+-- whole surface equally busy, so nothing reads as damage because nothing reads
+-- as whole. There is deliberately no aggregate speckle in this material.
+--
+-- Depressions -- a breakup, a pothole -- are lit as depressions: dark floor,
+-- and the lit lip on the lower-right inner wall, the wall the key light
+-- reaches.
 
 local P = require("pixel_utils")
 local palette = require("palette")
@@ -16,67 +26,102 @@ function asphalt.fill(surface, rng_stream, opts)
   local area = P.area(surface, opts.area)
   local mask = P.mask(surface, opts)
   local base = palette.resolve(opts.base or asphalt.base)
+  local field = area.w * area.h
 
   P.rect_fill(surface, area.x, area.y, area.w, area.h, base, { mask = mask })
 
-  -- Tar patches and worn-smooth stretches.
-  local patch = rng_stream:branch("asphalt_patch")
-  for _ = 1, 1 + patch:range(0, 1) do
-    P.cluster(surface,
-      patch:range(area.x, area.x + area.w - 1), patch:range(area.y, area.y + area.h - 1),
-      patch:range(12, 22), palette.shift(base, patch:chance(0.6) and -1 or 1), patch, { mask = mask })
-  end
-  -- Exposed aggregate: pairs, never single grains, and not many of them --
-  -- a road surface is mostly featureless, which is exactly why the cracks read.
-  local grit = rng_stream:branch("asphalt_grit")
-  P.speckle(surface, 1, palette.shift(base, 1), grit, { area = area, mask = opts.mask, max_size = 2 })
-  P.speckle(surface, 1, palette.shift(base, -1), grit, { area = area, mask = opts.mask, max_size = 2 })
+  -- ONE broad patch of ground-in dust and grime over the intact surface, and
+  -- it is deliberately NOT a step along the asphalt ramp. asphalt_3 to
+  -- asphalt_2 is 18 luminance -- on a road that dark it is a third of the
+  -- base's brightness, so any solid patch of it reads as a discrete blob
+  -- however large it is drawn, and a hundred tiles of those is the grey noise
+  -- this material was rebuilt to get rid of. metal_4 sits 6 luminance over
+  -- asphalt_3 and is just as neutral, so a broad patch of it reads as a
+  -- different asphalt mix -- an old repair -- rather than as a mark.
+  --
+  -- Near in VALUE is not enough: it has to be near in HUE too. dirt_3 is only
+  -- 3 luminance off asphalt_3 and was tried here first; being warm brown
+  -- against neutral grey it turned the road visibly brown-mottled, the same
+  -- way an equal-luminance olive patch turned the grass field into camouflage.
+  --
+  -- The rule that falls out of this, and it holds for every ground tile in the
+  -- set: the intact surface gets ONE patch that is near in both value and hue,
+  -- and ALL value contrast is reserved for structure and damage. That is what
+  -- leaves a fracture room to read as a fracture.
+  local grime = rng_stream:branch("asphalt_seal")
+  P.cluster(surface,
+    grime:range(area.x, area.x + area.w - 1), grime:range(area.y, area.y + area.h - 1),
+    grime:range(math.floor(field * 0.16), math.floor(field * 0.24)),
+    palette.resolve(opts.grime or "metal_4"), grime, { mask = mask, spread = 1.1 })
 end
 
---- A crack: a walk that branches once or twice and never runs straight.
---- Returns the pixels it drew, so a generator can grow weeds out of them.
+--- A crack. A fracture: straight segments, 45-degree kinks, one branch.
+--- Returns the pixels it drew, so a generator can crumble the surface beside
+--- it or grow weeds out of it.
 function asphalt.crack(surface, x, y, length, rng_stream, opts)
   opts = opts or {}
-  local mask = opts.mask
-  local color = palette.resolve(opts.color or "asphalt_1")
-  local drawn = {}
-  local dirs = { { 1, 0 }, { 1, 1 }, { 0, 1 }, { 1, -1 }, { -1, 1 } }
-  local function walk(cx, cy, len, d)
-    for i = 1, len do
-      if P.pixel(surface, cx, cy, color, mask) then drawn[#drawn + 1] = { cx, cy } end
-      if i % 2 == 0 and rng_stream:chance(0.55) then d = rng_stream:pick(dirs) end
-      cx, cy = cx + d[1], cy + d[2]
-    end
-    return cx, cy
-  end
-  local d = rng_stream:pick(dirs)
-  local ex, ey = walk(x, y, length, d)
-  if rng_stream:chance(0.6) then
-    walk(ex, ey, rng_stream:range(2, 4), rng_stream:pick(dirs))
-  end
-  -- Broken aggregate along one side of the fracture.
-  for _, p in ipairs(drawn) do
-    if rng_stream:chance(0.25) then
-      P.pixel(surface, p[1] + 1, p[2] + 1, palette.shift(color, 2), mask)
-    end
-  end
-  return drawn
+  return P.fracture(surface, x, y, length, opts.color or "asphalt_1", rng_stream, {
+    mask = opts.mask,
+    heading = opts.heading,
+    segment = opts.segment or { 3, 6 },
+    branches = opts.branches or 1,
+    branch_length = { 3, 5 },
+  })
 end
 
---- A pothole: dark floor, soil at the bottom, lit lip on the lower-right rim.
-function asphalt.pothole(surface, x, y, size, rng_stream, opts)
+--- The surface crumbled away: a compact broken-out area with a dark floor, the
+--- lit lip on its lower-right rim, and a little exposed aggregate standing in
+--- it. This is the mark that says "asphalt" rather than "grey ground" -- a
+--- crack on its own is a line, and a road breaks up in chunks.
+--- @return the pixels of the floor
+function asphalt.breakup(surface, x, y, size, rng_stream, opts)
   opts = opts or {}
   local mask = opts.mask
-  local floor_color = palette.resolve(opts.color or "asphalt_1")
-  local blob = P.cluster(surface, x, y, size, floor_color, rng_stream, { mask = mask })
-  local lowest
+  local base = surface:get(x, y)
+  if base == palette.TRANSPARENT then base = palette.resolve(asphalt.base) end
+  -- Two steps down, not one: the intact surface already carries a patch one
+  -- step down, so a breakup drawn at that value disappears into it. Damage has
+  -- to be the darkest thing on the road, with the lit lip beside it, or the
+  -- tile is just mottled grey.
+  local floor_color = palette.resolve(opts.color or palette.shift(base, -2))
+  -- Lobed rather than round: a chunk comes out of a road along the cracks
+  -- around it, so the shape is ragged. (A stepped inner wall was tried here and
+  -- removed: at five to nine pixels almost every pixel of the blob is on its
+  -- rim, so stepping the rim back up simply repaints the floor away.)
+  local blob = P.cluster(surface, x, y, size, floor_color, rng_stream,
+    { mask = mask, spread = 0.6 })
+
+  -- the lower-right rim is the wall the light reaches
+  local low
   for _, p in ipairs(blob) do
-    if not lowest or p[2] > lowest[2] or (p[2] == lowest[2] and p[1] > lowest[1]) then lowest = p end
-    if rng_stream:chance(0.35) then P.pixel(surface, p[1], p[2], "earth_2", mask) end
+    if not low or p[2] > low[2] or (p[2] == low[2] and p[1] > low[1]) then low = p end
   end
-  if lowest then
-    P.pixel(surface, lowest[1], lowest[2], palette.resolve(opts.lip or "asphalt_4"), mask)
-    P.pixel(surface, lowest[1] - 1, lowest[2], palette.resolve(opts.lip or "asphalt_4"), mask)
+  if low then
+    local lip = palette.resolve(opts.lip or palette.shift(base, 1))
+    P.pixel(surface, low[1], low[2], lip, mask)
+    P.pixel(surface, low[1] - 1, low[2], lip, mask)
+  end
+  -- aggregate left standing in the hollow, as a pair and never as one grain
+  if #blob >= 5 then
+    local g = blob[rng_stream:range(2, #blob - 1)]
+    local agg = palette.resolve(opts.aggregate or palette.shift(base, 1))
+    P.pixel(surface, g[1], g[2], agg, mask)
+    P.pixel(surface, g[1] + 1, g[2], agg, mask)
+  end
+  return blob
+end
+
+--- A pothole: a breakup deep enough to have gone through, with soil washed
+--- into the bottom of it.
+function asphalt.pothole(surface, x, y, size, rng_stream, opts)
+  opts = opts or {}
+  local blob = asphalt.breakup(surface, x, y, size, rng_stream, {
+    mask = opts.mask,
+    color = opts.color or "asphalt_1",
+    lip = opts.lip or "asphalt_4",
+  })
+  for _, p in ipairs(blob) do
+    if rng_stream:chance(0.35) then P.pixel(surface, p[1], p[2], "earth_2", opts.mask) end
   end
   return blob
 end

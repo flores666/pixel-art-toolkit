@@ -31,17 +31,28 @@ function gen.build(rng_stream, opts)
   }
   earth.fill(s, rng_stream, { wear = wear })
 
-  -- structure: stones pressed into the surface. Most tiles get none: a field
-  -- where every cell has a feature reads as static, however good the cell is.
+  -- structure: the dried crust. This is the tile's one form, and the more
+  -- churned the ground the further it has cracked -- but it is still absent
+  -- from a third of the tiles, because a field where every cell carries the
+  -- same structure reads as a printed pattern rather than as ground.
+  if rng_stream:chance(0.35 + 0.55 * wear) then
+    earth.crust(s, rng_stream:branch("crust"), { wear = wear })
+  end
+
+  -- structure: stones pressed into the surface. MOST TILES GET NONE. The soil
+  -- patches from the material are the tile's form; a stone is the exception
+  -- that proves the ground is real, and an exception on every cell is not an
+  -- exception -- it is the pepper this tile was rebuilt to get rid of.
   earth.stones(s, rng_stream:weighted {
-    { value = 0, weight = 3 }, { value = 1, weight = 3 }, { value = 2, weight = 1 },
+    { value = 0, weight = 5 }, { value = 1, weight = 3 }, { value = 2, weight = 1 },
   }, rng_stream:branch("stones"), {})
 
-  -- wear: dead sprigs that never made it, and the odd fallen chunk
-  if rng_stream:chance(0.35) then
+  -- wear: dead sprigs that never made it, and the odd fallen chunk. Both are
+  -- minority events for the same reason as the stones.
+  if rng_stream:chance(0.20) then
     grass.tufts(s, 1, rng_stream:branch("sprigs"), { color = "straw_2" })
   end
-  if rng_stream:chance(0.25) then
+  if rng_stream:chance(0.14) then
     debris.fill(s, rng_stream, { coverage = 0.05 })
   end
 

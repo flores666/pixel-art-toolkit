@@ -14,17 +14,21 @@ and grime ramps with the game's existing metro art.
 art/tools/
   init.lua            bootstrap: sets package.path, returns every module
   style.lua           every hard rule as data (grid, light, budgets, dither)
-  palette.lua         the fixed 28-colour palette, as six lighting ramps
+  palette.lua         the fixed 48-colour palette, as ten lighting ramps
   rng.lua             seeded variation: xorshift32 streams, named branches
   pixel_utils.lua     Surface + all primitives (line, polygon, cluster,
-                      dither, broken runs, outline, lighting, despeckle)
+                      fracture, dither, broken runs, outline, lighting,
+                      despeckle)
   aseprite.lua        the only module that knows Aseprite exists
   materials/          earth, grass, asphalt, debris (above ground)
                       concrete, metal, wood, rust, dirt (shared with the metro)
+                      each owns its own marks: soil crust, dry tufts, road
+                      fractures and break-out, decayed cast joints, fence posts,
+                      exposed reinforcement
   generators/         ground:    dirt_ground, dry_grass, cracked_asphalt
                       structure: concrete_ruin_wall, rusted_fence
                       props:     supply_crate, rusted_barrel
-  validators/         the five ship/no-ship rules
+  validators/         the seven ship/no-ship rules
   previews/           10x10 tile sheets, tiling checks, grid-visibility report,
                       palette strip
   png.lua             pure-Lua PNG writer (headless export needs no Aseprite)
@@ -63,7 +67,7 @@ The whole toolkit is plain Lua 5.4 apart from `aseprite.lua`, so the tests and
 previews run in a terminal:
 
 ```sh
-lua5.4 art/tools/tests/run_tests.lua              # 22 tests: palette, rng,
+lua5.4 art/tools/tests/run_tests.lua              # 29 tests: palette, rng,
                                                   # primitives, materials,
                                                   # generators, validators
 lua5.4 art/tools/tests/run_tests.lua --dump /tmp/art   # + PPM preview sheets

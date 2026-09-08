@@ -57,7 +57,36 @@ the only one with its own measurement, `previews.grid_report`:
 Calibrated, not invented: the game's **own** metro floor variants laid in a
 field score `seam_bias` **4.2 / 10.3** — every tile has a baked-in dark edge, and
 that grid is plain to see. Continuous, never-tiled reference art scores **0.01**.
-The above-ground ground tiles score 0.02–0.18.
+The above-ground ground tiles score 0.02–0.25.
+
+### How a ground tile is allowed to vary
+
+The same atlases calibrate the *other* half of the problem, which is what the
+inside of a ground tile may do. The game's platform field tiles hold **74–82 %
+of their area at a single colour**, carry the rest as hairline marks, and
+measure **0.10–0.17** edge density. That is what a surface a hundred tiles wide
+has to look like, and it rules out the obvious approach:
+
+- **The intact surface gets one broad patch, near in both value and hue.** A
+  patch a full ramp step from the base reads as a discrete *mark* however large
+  it is drawn — earth's steps are ~19 luminance apart, asphalt's ~18 — and a
+  hundred marks laid out on a 16 px pitch is pepper. Enlarging them turns
+  pepper into leopard spots; it does not fix it. So `dirt_ground` varies with
+  `straw_2` (+5 luminance on `earth_3`, warm on warm) and `cracked_asphalt`
+  with `metal_4` (+6 on `asphalt_3`, neutral on neutral).
+- **Near in value is not enough — it must be near in hue too.** `grass_3` is 2
+  luminance from `straw_2` and `dirt_3` is 3 from `asphalt_3`. Both are
+  invisible in *value* and both were tried; the olive turned the grass field
+  into camouflage and the brown turned the road visibly brown-mottled. Equal
+  luminance at a distant hue is what camouflage *is*.
+- **All value contrast is reserved for structure and damage.** A fracture, a
+  broken-out chunk, a stone's lit cap, a tuft's lit tip. That is what leaves
+  damage room to read as damage instead of competing with the field it sits in.
+- **Large-scale forms cannot cross a tile boundary.** Every tile wraps against
+  *itself*, so a tile's left edge is its own right edge and has nothing to do
+  with the neighbour's. Broad continuous shapes across a field are therefore
+  impossible by construction: the only things that survive repetition are
+  texture too quiet to count and marks that read as objects.
 
 What that means when you write a ground generator:
 
@@ -76,6 +105,19 @@ What that means when you write a ground generator:
 Structure tiles are exempt (`surface = "structure"`), and deliberately so: a
 wall **should** show its cast joint and a fence **should** show its folds. Those
 are construction lines, and hiding them would be a worse lie than the grid.
+
+The exemption is not a licence to print a rule, though. A construction line
+drawn identically on every tile is what made the first ruin wall read as
+wallpaper, so a line on a ruin **decays** — it wanders off its row and loses a
+chunk here and there — under one invariant:
+
+> **A construction line is pinned to its offset at both ends of its run.**
+
+A wall tile has to meet its neighbour's joint, so the line may do as it likes in
+the middle and nowhere else (`concrete.groove`, `opts.decay`). Break that and a
+wall run reads as a row of broken staples. The same reasoning is why a fence's
+rail is at a fixed row in every tile but its lit edge is a broken run, and why
+the corrugation pitch divides 16 exactly.
 
 ## 3. Colour
 
@@ -106,6 +148,11 @@ desaturated a step:
 Rules that go with it:
 
 - **No gradients.** A ramp step is a flat region; shading jumps a step.
+- **A ramp is for shading; it is not a fence around a material.** Highlights and
+  shadows never leave the ramp (below), but a *material* may name a step from
+  another ramp when that is the honest colour — bleached straw trodden into
+  soil, a different asphalt mix in an old repair. Ground fields depend on it,
+  because the near-value neighbours §2 requires are all in other ramps.
 - **Highlights and shadows are ramp moves**, never new colours: `palette.shift`
   and the `rect_fill_shift` / `dither_shift` / `broken_run` helpers. This is why
   rust on a fence matches rust on a barrel.
@@ -153,11 +200,21 @@ The key light is **fixed: upper-left** (`style.light`), above ground and below.
   what the first above-ground draft produced. Use `spread` 0 for a stone, ~0.4
   for mottling, 1.3+ for a drift or a stain.
 - A pixel with no same-coloured neighbour in its **8-cell neighbourhood** is a
-  stray. `isolated_pixels` caps strays at 6 per tile or 4 % of opaque pixels.
+  stray. `isolated_pixels` caps strays at 6 per tile **and** at 4 % of opaque
+  pixels: both bounds apply, and the validator binds on whichever is tighter.
+  (Taking the looser of the two lets each bound excuse a breach of the other,
+  which is what the implementation used to do.)
 - Every generator ends with `pixel_utils.despeckle`, which absorbs strays. It
   may never resolve one **into the outline colour**: beside a silhouette the
   outline is the local majority, and letting it win eats the shape.
 - Cracks, grain, scratches and stalks are **runs**, minimum 2–3 px, never dots.
+- A crack is a **fracture**, not a scribble: `pixel_utils.fracture` holds its
+  heading for a segment of 3–5 px, kinks 45° at a joint, and throws branches at
+  a wide angle from along the trunk rather than off its tip. A walk that
+  re-picks its direction every other step draws a stray diagonal scratch, which
+  is what soil, asphalt and concrete cracks all used to look like. The geometry
+  is shared; the colour, the extent and what crumbles beside it belong to the
+  material.
 
 ## 7. Busyness
 
@@ -167,18 +224,25 @@ caps it per **surface class**, which each generator declares:
 
 | `surface` | what it is | per-tile ceiling | measured here |
 | --- | --- | --- | --- |
-| `ground` | laid in fields; must be the calmest thing in the game | 0.30 | 0.07–0.30 |
-| `structure` | carries construction detail: joints, folds, fixings | 0.55 | 0.20–0.50 |
-| `prop` | adds a silhouette, an outline and internal structure | 0.60 | 0.43–0.56 |
+| `ground` | laid in fields; must be the calmest thing in the game | 0.30 | 0.23–0.28 |
+| `structure` | carries construction detail: joints, folds, fixings | 0.55 | 0.37–0.49 |
+| `prop` | adds a silhouette, an outline and internal structure | 0.60 | 0.56–0.58 |
 
 For ground the number that really matters is the **field** average
 (`style.grid.max_field_density` = 0.22), held at the level of the game's own
-authored floor tiles (0.17–0.19). Individual tiles may carry a fracture; a
+authored platform field tiles (0.10–0.17). Individual tiles may carry a fracture; a
 hundred of them may not.
 
 Two habits keep a surface under the ceiling: **fewer, larger marks** (one big
 cluster has far less edge per pixel than four small ones), and **letting most
 variants be plain**.
+
+Both measurements are blind to contrast — they count pixel pairs that *differ*,
+not by how much — so they cannot tell a calm near-value patch from a loud one.
+Use them as ceilings, never as a target, and settle the question of whether a
+surface is calm by looking at the field. Leave headroom, too: the ceilings are
+checked per seed, and levels reference tiles by seed forever, so a generator
+that only just fits over 64 seeds will breach it on seed 385.
 
 ## 8. Outlines
 
@@ -214,13 +278,13 @@ A material owns the vocabulary of marks a surface may make. Generators
 
 | material | kind | grammar |
 | --- | --- | --- |
-| `earth` | base | soil field, `stones` (lit cap + shadow) |
-| `grass` | base | dry field, `tufts` (leaning stalks, lit crown), `blade` |
-| `asphalt` | base | aggregate field, `crack` (branching, returns its pixels), `pothole` |
-| `concrete` | base | field, `groove` (cast joint), `crack`, `spall` |
-| `metal` | base | plate, `seam`, `rivet`, `scratch`, `corrugate` |
+| `earth` | base | soil field, `crust` (the shrinkage cracks of dried dirt), `stones` (lit cap + shadow) |
+| `grass` | base | dry field, `tufts` (leaning stalks, lit tip), `blade` |
+| `asphalt` | base | worn field, `crack` (a fracture, returns its pixels), `breakup` (crumbled surface), `pothole` |
+| `concrete` | base | field, `groove` (cast joint, `decay`), `crack`, `spall` |
+| `metal` | base | plate, `seam`, `rivet`, `scratch`, `corrugate`, `post` (an upright member) |
 | `wood` | base | grain, `planks`, `knot` |
-| `rust` | overlay | rimmed patches, `streak` |
+| `rust` | overlay | rimmed patches, `streak`, `bar` (exposed reinforcement) |
 | `dirt` | overlay | grime patches, `band` |
 | `debris` | overlay | chunks of whatever fell apart nearby |
 
@@ -232,8 +296,24 @@ A material owns the vocabulary of marks a surface may make. Generators
 - Overlay coverage is **fractional and may round to nothing**. A low coverage
   must mean "most tiles have none"; give a generator's wear a `0.00` weight so
   clean variants genuinely occur.
-- **Vegetation reads by direction, not by blobs.** Tufts are leaning strokes
-  with a lit crown. Round green patches read as confetti.
+- **Vegetation reads by direction, not by blobs.** Round green patches read as
+  confetti — and so, at this size, does a tuft drawn as a *colour*. A tuft
+  reads because it has **light on it**: a body a step darker than the field it
+  stands in, a tip a step or two lighter. Olive at the field's own value is a
+  pure hue change, i.e. camouflage (§2). Stalks are spaced two apart, not packed
+  side by side, or a shared lean overlaps them into a solid rectangle; and they
+  all lean **the same way**, because that is what direction means. One clump per
+  tile, sometimes a second right beside it — never a scatter of separate marks.
+- **A structural member is drawn as explicit ramp steps, not as a shift.** A
+  fence post or a rail is a separate piece of steel, and shifting whatever
+  happens to be underneath lets the sheet's fold pattern show straight through
+  it (`metal.post`).
+- **A material's marks have to relate to each other.** A fracture and the
+  crumbled surface beside it are one piece of damage, so the breakup is seeded
+  *on* the crack and the silt is biased *to* it. Marks placed independently
+  measure the same and read as mess: what makes a tile say "damaged asphalt"
+  rather than "grey noisy ground" is one event, related, with the rest of the
+  surface left whole.
 
 ## 11. Seeds and determinism
 

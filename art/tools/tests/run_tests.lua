@@ -386,6 +386,37 @@ test("validators catch each thing they exist to catch", function()
   assert(ids5.palette_size, "too many colours")
 end)
 
+test("the isolated-pixel cap binds on the tighter of its two bounds", function()
+  -- Regression: the rule took math.max of the absolute and the proportional
+  -- cap, so each bound excused a breach of the other. ART_STYLE.md says both
+  -- apply: 6 strays per tile AND 4% of the opaque pixels.
+  local function strays_allowed(surface)
+    local rule
+    for _, r in ipairs(validators.rules) do if r.id == "isolated_pixels" then rule = r end end
+    local found = rule.check(surface, { wrap = false })
+    return found
+  end
+
+  -- A full tile: 256 opaque, so the proportional cap is 10 and the absolute
+  -- cap of 6 is the tighter one. Nine strays must fail.
+  local full = P.new(16, 16, { fill = "concrete_4" })
+  for i = 0, 8 do full:set((i * 5) % 16, (i * 3) % 16, "ink_1") end
+  assert_eq(#P.isolated(full, { wrap = false }), 9, "nine strays placed")
+  local issue = strays_allowed(full)
+  assert(issue, "9 strays on a full tile must breach the 6-per-tile cap")
+
+  -- A sparse asset: 25 opaque, so the proportional cap is 1 and it is now the
+  -- tighter one. Four strays must fail even though 4 <= 6.
+  local sparse = P.new(16, 16)
+  P.rect_fill(sparse, 2, 2, 5, 5, "concrete_4")
+  for i = 0, 3 do sparse:set(9 + i * 2, 12, "ink_1") end
+  local _, opaque = P.histogram(sparse)
+  assert_eq(opaque, 25 + 4, "sparse asset opaque count")
+  assert_eq(#P.isolated(sparse, { wrap = false }), 4, "four strays placed")
+  assert(strays_allowed(sparse),
+    "4 strays over 29 opaque pixels must breach the 4% cap even though 4 <= 6")
+end)
+
 -- previews ---------------------------------------------------------------------------
 
 test("preview sheets are 10x10 fields that themselves validate", function()

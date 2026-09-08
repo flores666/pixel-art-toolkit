@@ -252,6 +252,13 @@ end
 --   spread 0.0  a tight round patch (a stone, a tuft)
 --   spread 0.5  a lobed patch (soil mottling, rust)
 --   spread 1.5+ a wandering ribbon (a root, a stain running downhill)
+--
+-- `size` is a pixel count and is honoured up to the size of the surface. It
+-- used to be clamped at style.cluster_max * 4, which silently truncated any
+-- caller asking for a large REGION -- a soil drift, a broken-out area of road
+-- -- down to a 40-pixel blob. Small marks are a material's business (that is
+-- what style.cluster_max and style.speck_max are for); a primitive that
+-- quietly draws something other than what it was asked for is a trap.
 -- On a wrapping surface distance is measured the short way round, so a blob
 -- that crosses an edge stays compact instead of stretching back across the tile.
 -- @return list of {x, y} actually painted
@@ -259,7 +266,7 @@ function P.cluster(surface, x, y, size, color, rng_stream, opts)
   opts = opts or {}
   local mask = opts.mask
   local spread = opts.spread or 0.4
-  size = math.max(1, math.min(size, style.cluster_max * 4))
+  size = math.max(1, math.min(size, surface.width * surface.height))
 
   local function axis_delta(a, b, extent)
     local d = math.abs(a - b)
@@ -298,6 +305,70 @@ function P.cluster(surface, x, y, size, color, rng_stream, opts)
     end
   end
   return painted
+end
+
+-- The eight compass directions, in order, so that adding 1 turns 45 degrees.
+local COMPASS = {
+  { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 },
+  { -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+}
+P.compass = COMPASS
+
+--- A hairline fracture: a one-pixel-wide walk that HOLDS ITS HEADING, kinks by
+-- 45 degrees at a joint, and throws branches at a wide angle.
+--
+-- This is the shape of a crack, and getting it right is the difference between
+-- damage and a scratch. A walk that re-picks its direction every other step
+-- produces a scribble that reads as a stray diagonal mark; a real fracture runs
+-- in straight segments of several pixels and changes direction at a joint,
+-- because it is following stress, not wandering. Cracks in soil, asphalt and
+-- concrete all share that geometry -- only their colour, extent and what
+-- crumbles beside them differ, which is what each material owns.
+--
+-- opts:
+--   heading        0..7 into P.compass; default random. Segments kink around it
+--   segment        { lo, hi } pixels between kinks (default { 3, 5 })
+--   branches       how many branches to throw off the trunk (default 0)
+--   branch_length  { lo, hi } (default { 3, 5 })
+--   mask
+-- @return list of { x, y } actually painted, trunk first
+function P.fracture(surface, x, y, length, color, rng_stream, opts)
+  opts = opts or {}
+  local mask = opts.mask
+  local seg_lo, seg_hi = table.unpack(opts.segment or { 3, 5 })
+  local drawn = {}
+
+  local function walk(cx, cy, len, heading)
+    local run = rng_stream:range(seg_lo, seg_hi)
+    for i = 1, len do
+      if P.pixel(surface, cx, cy, color, mask) then drawn[#drawn + 1] = { cx, cy } end
+      if i % run == 0 then
+        -- a joint: turn 45 degrees, one way or the other, and keep going
+        heading = (heading + (rng_stream:chance(0.5) and 1 or 7)) % 8
+        run = rng_stream:range(seg_lo, seg_hi)
+      end
+      local d = COMPASS[heading + 1]
+      cx, cy = cx + d[1], cy + d[2]
+    end
+    return heading
+  end
+
+  local heading = opts.heading or rng_stream:range(0, 7)
+  local trunk_end = #drawn
+  heading = walk(x, y, length, heading)
+
+  -- Branches leave the trunk at a wide angle, from somewhere along it rather
+  -- than from its tip: a fracture that only ever forks at the end reads as a
+  -- letter Y, not as damage.
+  local bl_lo, bl_hi = table.unpack(opts.branch_length or { 3, 5 })
+  for _ = 1, (opts.branches or 0) do
+    if trunk_end + 2 > #drawn then break end
+    local at = drawn[rng_stream:range(trunk_end + 2, #drawn - 1)]
+    if not at then break end
+    local turn = rng_stream:chance(0.5) and 2 or 6
+    walk(at[1], at[2], rng_stream:range(bl_lo, bl_hi), (heading + turn + rng_stream:range(-1, 1)) % 8)
+  end
+  return drawn
 end
 
 --- Scatter `count` small clusters inside an area. The smallest speck is two
@@ -539,9 +610,14 @@ function P.despeckle(surface, opts)
 end
 
 --- Fraction of neighbouring opaque pixel pairs whose colour differs: a plain
--- measure of how busy a surface is. The game's own hand-authored floor tiles
--- sit near 0.19 and its wall faces near 0.25; generated texture that runs far
--- above that is noise, however legal each individual pixel is.
+-- measure of how busy a surface is. The game's own hand-authored platform field
+-- tiles sit at 0.10-0.17 and its wall faces near 0.25; generated texture that
+-- runs far above that is noise, however legal each individual pixel is.
+--
+-- It is blind to contrast -- a pair counts the same whether it steps one
+-- luminance or a hundred -- so a low number does not prove a surface is calm
+-- and a high one does not prove it is noisy. Use it as a ceiling and judge the
+-- art by looking at the field.
 function P.edge_density(surface)
   local differing, pairs_seen = 0, 0
   for x, y, c in surface:pixels() do

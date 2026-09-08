@@ -44,7 +44,11 @@ function rust.fill(surface, rng_stream, opts)
   for _ = 1, patches do
     local x, y = site(area, site_rng, opts.bias)
     if x then
-      local blob = P.cluster(surface, x, y, site_rng:range(5, 10), rim, site_rng, { mask = mask })
+      -- Lobed, not radial: P.cluster grown tight from a seed makes a diamond
+      -- or a plus at these sizes, and a plus reads as a printed symbol rather
+      -- than as corrosion eating into a surface.
+      local blob = P.cluster(surface, x, y, site_rng:range(5, 10), rim, site_rng,
+        { mask = mask, spread = 0.9 })
       -- Core = the eroded interior of the blob: painted pixels surrounded on at
       -- least three sides by rim. At 16px a patch is too small for a strict
       -- 4-of-4 erosion, and three sides still leaves a rim all the way round.
@@ -68,6 +72,41 @@ function rust.fill(surface, rng_stream, opts)
         rust.streak(surface, x, y + 1, site_rng:range(2, 5), site_rng, { mask = mask })
       end
     end
+  end
+end
+
+--- Exposed reinforcement: a straight corroded bar, lit along the edge facing
+--- the key light and staining the surface below it.
+--
+-- By the time you can see the rebar in a panel wall it is not steel any more,
+-- which is why this lives in the corrosion material rather than in concrete.
+-- It is drawn as a RUN, never as a dotted line: a bar reads by being straight
+-- and continuous, and it is the one mark in a ruin wall that says the wall is
+-- structural rather than just old.
+-- @param axis "h" or "v"
+function rust.bar(surface, x, y, length, axis, rng_stream, opts)
+  opts = opts or {}
+  local mask = opts.mask
+  local body = palette.resolve(opts.color or "rust_2")
+  local lit = palette.shift(body, 1)
+  length = math.max(3, length)
+  for i = 0, length - 1 do
+    local px = axis == "h" and x + i or x
+    local py = axis == "h" and y or y + i
+    P.pixel(surface, px, py, body, mask)
+    -- the light comes from the upper left: a horizontal bar is lit on top, a
+    -- vertical one down its left side
+    if axis == "h" then
+      P.pixel(surface, px, py - 1, lit, mask)
+    else
+      P.pixel(surface, px - 1, py, lit, mask)
+    end
+  end
+  -- what has run off it since
+  if opts.streak ~= false and rng_stream:chance(0.6) then
+    local sx = axis == "h" and x + rng_stream:range(0, length - 1) or x
+    local sy = axis == "h" and y + 1 or y + length
+    rust.streak(surface, sx, sy, rng_stream:range(2, 4), rng_stream, { mask = mask })
   end
 end
 
