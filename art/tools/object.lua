@@ -22,10 +22,39 @@ local object = {}
 --   wear         spec passed to wear.apply
 --   shadow       false to skip; otherwise { y = row, from = x, to = x }
 --   keep         despeckle protection for deliberate single pixels
+--   sockets      the generator's socket table. AN EDGE WHERE THE RUN
+--                CONTINUES IS NOT OUTLINED AND CASTS NO CONTACT SHADOW.
+--
+-- That last rule is what makes a modular kit work, and it is easy to miss
+-- because it only shows up once pieces are laid next to each other. A wall
+-- piece whose run carries on through its bottom edge is not ending there --
+-- outlining it draws a black rule across the middle of the run, and giving it
+-- a contact shadow plants the middle of a wall on the ground. Both were
+-- happening, and the socket declaration already says exactly which edges are
+-- joins, so it drives the mask rather than each piece remembering.
 function object.finish(surface, rng_stream, opts)
   opts = opts or {}
+
+  -- Which borders are joins rather than silhouette. "open" and "ground" are
+  -- not connections: the run has ended, so the silhouette is real there.
+  local joins = {}
+  for side, socket in pairs(opts.sockets or {}) do
+    if socket ~= "open" and socket ~= "ground" then joins[side] = true end
+  end
+  local w, h = surface.width, surface.height
+  local border_mask
+  if next(joins) then
+    border_mask = function(x, y)
+      if joins.left and x == 0 then return false end
+      if joins.right and x == w - 1 then return false end
+      if joins.top and y == 0 then return false end
+      if joins.bottom and y == h - 1 then return false end
+      return true
+    end
+  end
+
   if opts.outline ~= false then
-    P.outline(surface, opts.outline_color)
+    P.outline(surface, opts.outline_color, { mask = border_mask })
   end
   if opts.wear then
     require("wear").apply(surface, rng_stream:branch("wear"), opts.wear)
@@ -36,7 +65,9 @@ function object.finish(surface, rng_stream, opts)
   P.despeckle(surface, { keep = opts.keep })
   P.strip_strays(surface, { keep = opts.keep })
 
-  if opts.shadow ~= false then
+  -- No contact shadow on an edge the run continues through: the object does
+  -- not touch the ground there, it carries on into the next cell.
+  if opts.shadow ~= false and not joins.bottom then
     local s = opts.shadow or {}
     local y = s.y or (surface.height - 1)
     local from = s.from or 1

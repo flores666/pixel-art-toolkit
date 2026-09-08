@@ -28,6 +28,13 @@ local validators = {}
 
 local MAX_SAMPLES = 8
 
+-- The ramps that wear is drawn from, for the socket check only. Grime and
+-- corrosion are overlay materials outright; straw and grass are here because
+-- on a MODULAR PIECE they can only be a weed placed by the wear system (a
+-- terrain fill uses them as a base material, but a terrain has no sockets).
+-- A weed at the foot of a wall does not stop the wall meeting its neighbour.
+local OVERLAY_RAMPS = { dirt = true, rust = true, straw = true, grass = true }
+
 local function issue(rule, message, samples, count)
   return { rule = rule, message = message, samples = samples or {}, count = count or #(samples or {}) }
 end
@@ -417,6 +424,116 @@ validators.group_rules = {
     end,
   },
 }
+
+--- Edge profile of a surface: for each row (or column) of one edge, whether it
+--- is opaque and which palette RAMP it belongs to.
+--
+-- This is the mechanical content of "these pieces connect", and it took one
+-- correction to get right. Two things have to line up for a run of pieces to
+-- read as one object:
+--
+--   * the SILHOUETTE: which rows of the edge are opaque. A step here is a
+--     visible break in the wall;
+--   * the base MATERIAL: concrete meeting concrete, steel meeting steel. A
+--     run that changes substance at every join reads as a patchwork.
+--
+-- WEAR IS NOT PART OF IT. Overlay ramps -- grime and corrosion -- legitimately
+-- land on an edge, and the first version of this check compared raw ramps and
+-- so reported 119 mismatches for one wall meeting itself: a dirt patch at row
+-- 12 made the profile say `dirt` instead of `concrete`. That is noise on top
+-- of a connection, not a broken one. Overlay pixels are recorded as `*` and
+-- match any opaque row.
+--
+-- Exact colour is deliberately not compared either: a cast joint decays, and
+-- one piece may be rustier than its neighbour.
+-- @param side "left" | "right" | "top" | "bottom"
+function validators.edge_profile(surface, side)
+  local w, h = surface.width, surface.height
+  local n = (side == "left" or side == "right") and h or w
+  local profile = {}
+  for i = 0, n - 1 do
+    local x, y
+    if side == "left" then x, y = 0, i
+    elseif side == "right" then x, y = w - 1, i
+    elseif side == "top" then x, y = i, 0
+    else x, y = i, h - 1 end
+    local c = surface:get(x, y)
+    if c == palette.TRANSPARENT then
+      profile[i + 1] = "-"
+    else
+      local ramp = palette.slot(c)
+      profile[i + 1] = OVERLAY_RAMPS[ramp] and "*" or (ramp or "?")
+    end
+  end
+  return profile
+end
+
+--- Do two edge profiles mate? `*` (a wear overlay) matches any opaque row.
+function validators.profiles_match(a, b)
+  local mismatch = {}
+  for i = 1, math.max(#a, #b) do
+    local x, y = a[i], b[i]
+    local ok
+    if x == y then ok = true
+    elseif x == nil or y == nil then ok = false
+    -- a wear overlay may sit on either side of the join; what it may not do is
+    -- appear where the other piece has nothing at all
+    elseif x == "*" then ok = y ~= "-"
+    elseif y == "*" then ok = x ~= "-"
+    else ok = false end
+    if not ok then
+      mismatch[#mismatch + 1] = ("row %d: %s vs %s"):format(i - 1, tostring(x), tostring(y))
+    end
+  end
+  return #mismatch == 0, mismatch
+end
+
+--- Every piece presenting the same socket must agree on that edge's profile.
+--
+-- Checked across the whole library at once rather than per generator, because
+-- the claim is inherently about a PAIR of pieces: `wall_straight` promising
+-- "wall_core" on its right and `wall_broken` promising it on its left is only
+-- meaningful if the two profiles match. Run by the test suite and by
+-- export.lua.
+-- @return ok, list of issues
+function validators.check_sockets(opts)
+  opts = opts or {}
+  local generators = require("generators")
+  local seeds = opts.seeds or 6
+  -- socket name -> { profile, source } for the first piece that defined it
+  local defined, issues = {}, {}
+
+  for _, name in ipairs(opts.only or generators.names) do
+    local gen = generators.get(name)
+    if gen.sockets then
+      for seed = 1, seeds do
+        local surface = generators.build(name, seed)
+        for side, socket in pairs(gen.sockets) do
+          -- "open" and "ground" are not connection promises: an open edge says
+          -- the run has ENDED and a ground edge says there is nothing there.
+          -- Only a named socket claims to mate with something.
+          if socket ~= "open" and socket ~= "ground" then
+            local profile = validators.edge_profile(surface, side)
+            local key = socket
+            local prior = defined[key]
+            if not prior then
+              defined[key] = { profile = profile, source = ("%s.%s seed %d"):format(name, side, seed) }
+            else
+              local matched, mismatch = validators.profiles_match(profile, prior.profile)
+              if not matched and #mismatch > style.socket_tolerance then
+                issues[#issues + 1] = issue("sockets",
+                  ("socket '%s': %s.%s (seed %d) does not match %s -- %d row(s) differ: %s")
+                    :format(socket, name, side, seed, prior.source, #mismatch,
+                      table.concat(mismatch, "; ", 1, math.min(4, #mismatch))))
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return #issues == 0, issues
+end
 
 --- Cross-variant checks for one generator.
 -- @return report { ok, name, issues }

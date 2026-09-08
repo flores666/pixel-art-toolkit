@@ -72,7 +72,7 @@ generators.modules = {
   -- structure
   "concrete_ruin_wall",
   "rusted_fence",
-  -- TODO "walls",               -- set: the modular ruined-wall kit
+  "walls",               -- set: the modular ruined-wall kit               -- set: the modular ruined-wall kit
   -- TODO "fences",              -- set: the modular fence/barrier kit
   -- infrastructure
   -- TODO "road_kit",            -- set: barriers, signs, poles, lamps, cabinets, pipes
